@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Street Garage - Title</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a12; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// SHARED DATA CONSTANTS (same across all files)
+// ============================================================
+const COLORS = {
+  bg: '#0a0a12', panelBg: '#141828', panelBorder: '#3a4060',
+  text: '#c8c8d0', dimText: '#5a6070', accent: '#e8c840',
+  green: '#40d060', red: '#e04040', yellow: '#f0c830',
+  lightGray: '#a0a0b0', darkGray: '#2a3040', orange: '#e08030'
+};
+
+const W = 320, H = 200;
+const canvas = document.getElementById('c');
+canvas.width = W; canvas.height = H;
+
+function scaleCanvas() {
+  const s = Math.min(Math.floor(window.innerWidth / W), Math.floor(window.innerHeight / H));
+  canvas.style.width = (W * s) + 'px';
+  canvas.style.height = (H * s) + 'px';
+}
+scaleCanvas();
+window.addEventListener('resize', scaleCanvas);
+
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// ============================================================
+// RENDERER UTILITIES
+// ============================================================
+function drawRect(x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(Math.floor(x), Math.floor(y), w, h); }
+function drawText(str, x, y, color, size) {
+  ctx.fillStyle = color || COLORS.text;
+  ctx.font = (size || 8) + 'px monospace';
+  ctx.fillText(str, Math.floor(x), Math.floor(y));
+}
+function drawTextCentered(str, x, y, color, size) {
+  ctx.fillStyle = color || COLORS.text;
+  ctx.font = (size || 8) + 'px monospace';
+  const tw = ctx.measureText(str).width;
+  ctx.fillText(str, Math.floor(x - tw / 2), Math.floor(y));
+}
+function drawPanel(x, y, w, h) {
+  drawRect(x, y, w, h, COLORS.panelBg);
+  ctx.strokeStyle = COLORS.panelBorder;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+function drawButton(x, y, w, h, label, hover) {
+  drawRect(x, y, w, h, hover ? '#2a3050' : COLORS.darkGray);
+  ctx.strokeStyle = hover ? COLORS.accent : '#4a5070';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  drawTextCentered(label, x + w / 2, y + h / 2 + 3, hover ? COLORS.accent : COLORS.text);
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+const mouse = { x: 0, y: 0 };
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+});
+canvas.addEventListener('click', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+  handleClick(mouse.x, mouse.y);
+});
+
+// ============================================================
+// AUDIO (Web Audio API)
+// ============================================================
+let audioCtx = null;
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+function playTone(freq, dur, type, vol) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.value = vol || 0.1;
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+function sfxClick() { playTone(800, 0.05, 'square', 0.08); }
+function sfxSelect() { playTone(600, 0.1, 'square', 0.1); playTone(900, 0.15, 'square', 0.08); }
+function sfxError() { playTone(200, 0.2, 'sawtooth', 0.1); }
+
+// ============================================================
+// GAME DATA HELPERS
+// ============================================================
+function saveGame(data) { localStorage.setItem('streetgarage_save', JSON.stringify(data)); }
+function loadGame() { const d = localStorage.getItem('streetgarage_save'); return d ? JSON.parse(d) : null; }
+function hasSave() { return !!localStorage.getItem('streetgarage_save'); }
+
+// ============================================================
+// TITLE SCREEN STATE
+// ============================================================
+let titleState = 'title'; // title, loadlist, newgame
+let saveList = [];
+let frameCount = 0;
+
+function generateSaveList() {
+  saveList = [];
+  for (let i = 0; i < 5; i++) {
+    const key = 'streetgarage_slot_' + i;
+    const d = localStorage.getItem(key);
+    if (d) {
+      try { saveList.push({ slot: i, data: JSON.parse(d), exists: true }); } catch(e) {}
+    } else {
+      saveList.push({ slot: i, data: null, exists: false });
+    }
+  }
+}
+
+function createNewGame() {
+  const gameData = {
+    cash: 3500,
+    reputation: 0,
+    cars: [],
+    currentCarIdx: -1,
+    racesCompleted: 0,
+    racesWon: 0,
+    day: 1,
+    garageLevel: 1
+  };
+  return gameData;
+}
+
+// ============================================================
+// PIXEL ART CAR DRAWING (for title screen)
+// ============================================================
+function drawTitleCar(cx, cy, colorIdx, scale) {
+  const s = scale || 1;
+  const carColors = ['#c03030','#2060c0','#d0a020','#408040','#e0e0e0','#303050'];
+  const col = carColors[colorIdx % carColors.length];
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(s, s);
+
+  // Shadow
+  drawRect(-30, 28, 60, 4, 'rgba(0,0,0,0.3)');
+
+  // Body lower
+  drawRect(-28, 10, 56, 14, col);
+  // Body upper (cabin)
+  drawRect(-16, -2, 30, 14, col);
+  // Roof
+  drawRect(-12, -6, 22, 5, col);
+
+  // Windows
+  drawRect(-14, -1, 8, 10, '#6090c0');
+  drawRect(-4, -1, 8, 10, '#6090c0');
+  drawRect(6, -1, 8, 10, '#6090c0');
+
+  // Headlight
+  drawRect(28, 12, 3, 4, '#ffffa0');
+  // Taillight
+  drawRect(-30, 12, 3, 4, '#ff4040');
+
+  // Bumpers
+  drawRect(-31, 22, 62, 3, '#808090');
+
+  // Wheels
+  drawRect(-22, 24, 12, 8, '#1a1a1a');
+  drawRect(10, 24, 12, 8, '#1a1a1a');
+  // Hubcaps
+  drawRect(-20, 26, 8, 4, '#a0a0b0');
+  drawRect(12, 26, 8, 4, '#a0a0b0');
+
+  // Hood scoop
+  drawRect(14, -2, 8, 3, col);
+
+  ctx.restore();
+}
+
+// ============================================================
+// TITLE SCREEN RENDERING
+// ============================================================
+function drawTitleScreen() {
+  // Background with subtle pattern
+  drawRect(0, 0, W, H, '#0a0a12');
+
+  // Animated road lines
+  for (let i = 0; i < 8; i++) {
+    const lx = ((frameCount * 2 + i * 50) % (W + 40)) - 20;
+    drawRect(lx, H - 15, 20, 2, '#3a4060');
+  }
+
+  // Road surface
+  drawRect(0, H - 20, W, 20, '#1a1a28');
+
+  // Title
+  drawTextCentered('STREET GARAGE', W / 2, 30, COLORS.accent, 16);
+  drawTextCentered('~ ~ ~', W / 2, 44, COLORS.dimText, 8);
+  drawTextCentered('A Used Car Racing Game', W / 2, 56, COLORS.lightGray, 8);
+
+  // Animated car
+  const carX = W / 2 + Math.sin(frameCount * 0.03) * 40;
+  drawTitleCar(carX, 95, frameCount % 6, 1.2);
+
+  // Menu buttons
+  const btnY = [130, 148, 166];
+  const btnLabels = ['NEW GAME', 'LOAD GAME', 'CREDITS'];
+
+  for (let i = 0; i < btnLabels.length; i++) {
+    const hover = mouse.x >= 100 && mouse.x <= 220 && mouse.y >= btnY[i] && mouse.y <= btnY[i] + 14;
+    drawButton(100, btnY[i], 120, 14, btnLabels[i], hover);
+  }
+
+  // Version text
+  drawText('v1.0 - 1989', W - 55, H - 3, COLORS.dimText);
+}
+
+function drawLoadScreen() {
+  drawRect(0, 0, W, H, '#0a0a12');
+  drawTextCentered('LOAD GAME', W / 2, 8, COLORS.accent, 10);
+
+  for (let i = 0; i < saveList.length; i++) {
+    const y = 24 + i * 30;
+    const hover = mouse.x >= 10 && mouse.x <= W - 10 && mouse.y >= y && mouse.y <= y + 26;
+    drawPanel(10, y, W - 20, 24);
+
+    if (saveList[i].exists) {
+      const d = saveList[i].data;
+      drawText(`Slot ${i + 1}: $${d.cash} | Cars: ${d.cars.length}`, 18, y + 10, COLORS.text);
+      drawText(`Day ${d.day} | Rep: ${d.reputation}`, 18, y + 20, COLORS.dimText);
+    } else {
+      drawText(`Slot ${i + 1}: EMPTY`, 18, y + 14, COLORS.dimText);
+    }
+
+    if (hover) {
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(9.5, y - 0.5, W - 18, 25);
+    }
+  }
+
+  drawButton(5, H - 16, 40, 12, 'BACK',
+    mouse.x >= 5 && mouse.x <= 45 && mouse.y >= H - 16 && mouse.y <= H - 4);
+}
+
+function drawCreditsScreen() {
+  drawRect(0, 0, W, H, '#0a0a12');
+  drawTextCentered('CREDITS', W / 2, 8, COLORS.accent, 10);
+  drawTextCentered('Street Garage v1.0', W / 2, 30, COLORS.text);
+  drawTextCentered('A retro garage sim', W / 2, 44, COLORS.dimText);
+  drawTextCentered('', W / 2, 58, COLORS.text);
+  drawTextCentered('Inspired by the golden age', W / 2, 70, COLORS.lightGray);
+  drawTextCentered('of DOS car management games.', W / 2, 82, COLORS.lightGray);
+  drawTextCentered('', W / 2, 96, COLORS.text);
+  drawTextCentered('No copyrighted material used.', W / 2, 108, COLORS.dimText);
+  drawTextCentered('All names are fictional.', W / 2, 120, COLORS.dimText);
+  drawTextCentered('', W / 2, 134, COLORS.text);
+  drawTextCentered('Built with HTML5 Canvas', W / 2, 146, COLORS.dimText);
+  drawTextCentered('and vanilla JavaScript.', W / 2, 158, COLORS.dimText);
+
+  drawButton(5, H - 16, 40, 12, 'BACK',
+    mouse.x >= 5 && mouse.x <= 45 && mouse.y >= H - 16 && mouse.y <= H - 4);
+}
+
+// ============================================================
+// CLICK HANDLER
+// ============================================================
+function handleClick(mx, my) {
+  initAudio();
+
+  if (titleState === 'title') {
+    if (mx >= 100 && mx <= 220) {
+      if (my >= 130 && my <= 144) {
+        // NEW GAME
+        sfxSelect();
+        const gd = createNewGame();
+        saveGame(gd);
+        window.location.href = 'parts-shop.html';
+      } else if (my >= 148 && my <= 162) {
+        // LOAD GAME
+        sfxClick();
+        generateSaveList();
+        titleState = 'loadlist';
+      } else if (my >= 166 && my <= 180) {
+        // CREDITS
+        sfxClick();
+        titleState = 'credits';
+      }
+    }
+  } else if (titleState === 'loadlist') {
+    for (let i = 0; i < saveList.length; i++) {
+      const y = 24 + i * 30;
+      if (mx >= 10 && mx <= W - 10 && my >= y && my <= y + 26) {
+        if (saveList[i].exists) {
+          sfxSelect();
+          localStorage.setItem('streetgarage_save', JSON.stringify(saveList[i].data));
+          window.location.href = 'parts-shop.html';
+        } else {
+          sfxError();
+        }
+      }
+    }
+    if (mx >= 5 && mx <= 45 && my >= H - 16 && my <= H - 4) {
+      sfxClick();
+      titleState = 'title';
+    }
+  } else if (titleState === 'credits') {
+    if (mx >= 5 && mx <= 45 && my >= H - 16 && my <= H - 4) {
+      sfxClick();
+      titleState = 'title';
+    }
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+function gameLoop() {
+  frameCount++;
+
+  if (titleState === 'title') drawTitleScreen();
+  else if (titleState === 'loadlist') drawLoadScreen();
+  else if (titleState === 'credits') drawCreditsScreen();
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
+

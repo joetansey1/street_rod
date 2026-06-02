@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Street Garage - Tune Shop</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a12; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// CONSTANTS & SETUP
+// ============================================================
+const COLORS = {
+  bg: '#0a0a12', panelBg: '#141828', panelBorder: '#3a4060',
+  text: '#c8c8d0', dimText: '#5a6070', accent: '#e8c840',
+  green: '#40d060', red: '#e04040', yellow: '#f0c830',
+  lightGray: '#a0a0b0', darkGray: '#2a3040', orange: '#e08030'
+};
+
+const W = 320, H = 200;
+const canvas = document.getElementById('c');
+canvas.width = W; canvas.height = H;
+
+function scaleCanvas() {
+  const s = Math.min(Math.floor(window.innerWidth / W), Math.floor(window.innerHeight / H));
+  canvas.style.width = (W * s) + 'px';
+  canvas.style.height = (H * s) + 'px';
+}
+scaleCanvas();
+window.addEventListener('resize', scaleCanvas);
+
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// ============================================================
+// RENDERER UTILITIES
+// ============================================================
+function drawRect(x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(Math.floor(x), Math.floor(y), w, h); }
+function drawText(str, x, y, color, size) {
+  ctx.fillStyle = color || COLORS.text;
+  ctx.font = (size || 8) + 'px monospace';
+  ctx.fillText(str, Math.floor(x), Math.floor(y));
+}
+function drawTextCentered(str, x, y, color, size) {
+  ctx.fillStyle = color || COLORS.text;
+  ctx.font = (size || 8) + 'px monospace';
+  const tw = ctx.measureText(str).width;
+  ctx.fillText(str, Math.floor(x - tw / 2), Math.floor(y));
+}
+function drawPanel(x, y, w, h) {
+  drawRect(x, y, w, h, COLORS.panelBg);
+  ctx.strokeStyle = COLORS.panelBorder;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+function drawButton(x, y, w, h, label, hover) {
+  drawRect(x, y, w, h, hover ? '#2a3050' : COLORS.darkGray);
+  ctx.strokeStyle = hover ? COLORS.accent : '#4a5070';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  drawTextCentered(label, x + w / 2, y + h / 2 + 3, hover ? COLORS.accent : COLORS.text);
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+const mouse = { x: 0, y: 0 };
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+});
+canvas.addEventListener('click', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+  handleClick(mouse.x, mouse.y);
+});
+
+// ============================================================
+// AUDIO
+// ============================================================
+let audioCtx = null;
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+function playTone(freq, dur, type, vol) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.value = vol || 0.1;
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+function sfxClick() { playTone(800, 0.05, 'square', 0.08); }
+function sfxSelect() { playTone(600, 0.1, 'square', 0.1); playTone(900, 0.15, 'square', 0.08); }
+function sfxError() { playTone(200, 0.2, 'sawtooth', 0.1); }
+function sfxWrench() { playTone(300, 0.08, 'sawtooth', 0.12); playTone(450, 0.06, 'square', 0.08); }
+function sfxCash() { playTone(1200, 0.08, 'square', 0.1); playTone(1600, 0.12, 'square', 0.08); }
+function sfxTune() { playTone(500, 0.1, 'square', 0.1); playTone(700, 0.15, 'square', 0.08); playTone(900, 0.2, 'square', 0.06); }
+function sfxRepair() { playTone(400, 0.15, 'sawtooth', 0.1); playTone(600, 0.2, 'square', 0.08); }
+
+// ============================================================
+// GAME DATA
+// ============================================================
+function loadGame() {
+  const d = localStorage.getItem('streetgarage_save');
+  return d ? JSON.parse(d) : null;
+}
+function saveGame() {
+  localStorage.setItem('streetgarage_save', JSON.stringify(gameData));
+}
+
+let gameData = loadGame();
+if (!gameData) { window.location.href = 'index.html'; }
+
+// ============================================================
+// PIXEL ART CAR DRAWING
+// ============================================================
+function drawCar(cx, cy, colorIdx, bodyStyle, scale) {
+  const s = scale || 1;
+  const carColors = ['#c03030','#2060c0','#d0a020','#408040','#e0e0e0','#303050','#8040a0','#c06020'];
+  const col = carColors[colorIdx % carColors.length];
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(s, s);
+
+  drawRect(-30, 28, 60, 4, 'rgba(0,0,0,0.3)');
+  drawRect(-28, 10, 56, 14, col);
+  drawRect(-16, -2, 30, 14, col);
+  drawRect(-12, -6, 22, 5, col);
+  drawRect(-14, -1, 8, 10, '#6090c0');
+  drawRect(-4, -1, 8, 10, '#6090c0');
+  drawRect(6, -1, 8, 10, '#6090c0');
+  drawRect(28, 12, 3, 4, '#ffffa0');
+  drawRect(-30, 12, 3, 4, '#ff4040');
+  drawRect(-31, 22, 62, 3, '#808090');
+  drawRect(-22, 24, 12, 8, '#1a1a1a');
+  drawRect(10, 24, 12, 8, '#1a1a1a');
+  drawRect(-20, 26, 8, 4, '#a0a0b0');
+  drawRect(12, 26, 8, 4, '#a0a0b0');
+  drawRect(14, -2, 8, 3, col);
+
+  ctx.restore();
+}
+
+// ============================================================
+// TUNE SHOP STATE
+// ============================================================
+let tuneState = 'main'; // main, engineTune, suspensionTune, brakeTune, repair
+let currentCarIdx = gameData.currentCarIdx >= 0 ? gameData.currentCarIdx : 0;
+let frameCount = 0;
+
+// Tune options data
+const TUNE_OPTIONS = {
+  engine: [
+    { name: 'Jet Carburetor', cost: 150, hpMod: 5, relMod: -2, desc: 'Richer fuel mixture' },
+    { name: 'Port & Polish', cost: 250, hpMod: 8, relMod: -4, desc: 'Smooth intake ports' },
+    { name: 'High-Lift Cam', cost: 400, hpMod: 12, relMod: -6, desc: 'More valve lift' },
+    { name: 'Nitrous System', cost: 600, hpMod: 25, relMod: -15, desc: 'Nitrous oxide injection' },
+    { name: 'Turbo Kit', cost: 1200, hpMod: 40, relMod: -20, desc: 'Forced induction' }
+  ],
+  suspension: [
+    { name: 'Stiff Springs', cost: 100, gripMod: 3, relMod: -2, desc: 'Firmer ride height' },
+    { name: 'Adjustable Shocks', cost: 200, gripMod: 5, relMod: -3, desc: 'Damping control' },
+    { name: 'Sway Bars', cost: 150, gripMod: 4, relMod: -2, desc: 'Reduce body roll' },
+    { name: 'Racing Suspension', cost: 500, gripMod: 10, relMod: -8, desc: 'Full race setup' }
+  ],
+  brakes: [
+    { name: 'Performance Pads', cost: 80, relMod: 2, desc: 'Better stopping power' },
+    { name: 'Slotted Rotors', cost: 150, relMod: 4, desc: 'Heat dissipation' },
+    { name: 'Big Brake Kit', cost: 350, relMod: 8, desc: 'Larger rotors & calipers' },
+    { name: 'Racing Brakes', cost: 600, relMod: 12, desc: 'Full race brake system' }
+  ],
+  repairs: [
+    { name: 'Oil Change', cost: 50, condMod: 5, desc: 'Fresh oil & filter' },
+    { name: 'Tune-Up', cost: 150, condMod: 15, desc: 'Spark plugs & timing' },
+    { name: 'Full Service', cost: 400, condMod: 35, desc: 'Complete overhaul' },
+    { name: 'Engine Rebuild', cost: 800, condMod: 60, desc: 'Full engine rebuild' },
+    { name: 'New Engine', cost: 1500, condMod: 80, desc: 'Replacement engine' }
+  ]
+};
+
+// ============================================================
+// TUNE SCREENS
+// ============================================================
+function drawMainTuneScreen() {
+  // Background - garage interior with tools
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Floor with oil stains
+  drawRect(0, H - 15, W, 15, '#2a2a38');
+  for (let i = 0; i < W; i += 20) {
+    drawRect(i, H - 15, 18, 1, '#3a3a48');
+  }
+
+  // Oil stain on floor
+  drawRect(200, H - 14, 30, 8, '#1a1a20');
+  drawRect(210, H - 13, 15, 6, '#1e1e24');
+
+  // Header bar
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('TUNE SHOP & REPAIRS', 5, 10, COLORS.accent);
+  drawText(`$${gameData.cash}`, W - 40, 10, COLORS.green);
+
+  // Car selector
+  if (gameData.cars.length > 1) {
+    drawText('Car:', 5, 20, COLORS.dimText);
+    for (let i = 0; i < gameData.cars.length; i++) {
+      const car = gameData.cars[i];
+      const x = 30 + i * 75;
+      const hover = mouse.x >= x && mouse.x <= x + 70 && mouse.y >= 18 && mouse.y <= 26;
+      const isActive = i === currentCarIdx;
+      drawButton(x, 18, 70, 8, car.name.substring(0, 12), hover);
+      if (isActive) {
+        ctx.strokeStyle = COLORS.green;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x - 0.5, 17.5, 72, 9);
+      }
+    }
+  }
+
+  // Current car display
+  const car = gameData.cars[currentCarIdx];
+  if (car) {
+    drawText(`${car.year} ${car.name}`, 5, 36, COLORS.accent);
+
+    // Stats display
+    drawPanel(5, 42, W - 10, 30);
+    drawText(`HP: ${car.getEffectiveHP()}   Grip: ${car.getEffectiveGrip()}   Reliability: ${car.getEffectiveReliability()}%`, 10, 52, COLORS.text);
+    drawText(`Weight: ${car.getEffectiveWeight()}   Condition: ${car.condition}%`, 10, 62, COLORS.lightGray);
+    drawText(`Performance Rating: ${car.getPerformance()}`, 10, 72, COLORS.yellow);
+
+    // Draw car
+    drawCar(160, 105, car.colorIdx, car.bodyStyle, 1.2);
+
+    // Condition warning
+    if (car.condition < 30) {
+      drawTextCentered('WARNING: LOW CONDITION - RISK OF BREAKDOWN!', W / 2, H - 30, COLORS.red);
+    } else if (car.condition < 60) {
+      drawTextCentered('Condition is fair. Consider repairs.', W / 2, H - 30, COLORS.orange);
+    }
+
+    // Tune option buttons
+    const btnY = [130, 148, 166];
+    const btnLabels = ['TUNE ENGINE', 'TUNE SUSPENSION', 'REPAIRS'];
+    const btnStates = ['engineTune', 'suspensionTune', 'repair'];
+
+    for (let i = 0; i < btnLabels.length; i++) {
+      const hover = mouse.x >= 100 && mouse.x <= 220 && mouse.y >= btnY[i] && mouse.y <= btnY[i] + 14;
+      drawButton(100, btnY[i], 120, 14, btnLabels[i], hover);
+    }
+
+    // Brake tune button
+    const brakeHover = mouse.x >= 100 && mouse.x <= 220 && mouse.y >= 184 && mouse.y <= 198;
+    drawButton(100, 184, 120, 14, 'TUNE BRAKES', brakeHover);
+  }
+
+  // Navigation buttons
+  drawButton(5, H - 14, 30, 12, 'MENU',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+function drawEngineTuneScreen() {
+  const car = gameData.cars[currentCarIdx];
+
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Header
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('ENGINE TUNING', 5, 10, COLORS.accent);
+  drawText(`$${gameData.cash}`, W - 40, 10, COLORS.green);
+
+  // Car preview
+  drawCar(260, 50, car.colorIdx, car.bodyStyle, 0.8);
+
+  // Current engine stats
+  drawPanel(5, 18, W - 70, 24);
+  drawText(`Current HP: ${car.getEffectiveHP()} | Reliability: ${car.getEffectiveReliability()}%`, 10, 28, COLORS.text);
+  drawText(`Engine: ${car.engineType || 'Stock'} | Tuned: ${car.tuneLevel || 0}x`, 10, 40, COLORS.dimText);
+
+  // Tune options
+  let py = 50;
+  for (let i = 0; i < TUNE_OPTIONS.engine.length; i++) {
+    const opt = TUNE_OPTIONS.engine[i];
+    const hover = mouse.x >= 10 && mouse.x <= W - 75 && mouse.y >= py && mouse.y <= py + 24;
+    const canAfford = gameData.cash >= opt.cost;
+
+    drawPanel(10, py, W - 85, 24);
+    if (hover && canAfford) {
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(9.5, py - 0.5, W - 83, 25);
+    }
+
+    drawText(`${opt.name}`, 16, py + 9, canAfford ? COLORS.text : COLORS.dimText);
+    drawText(`${opt.desc}`, 16, py + 18, COLORS.dimText);
+    drawText(`HP:${opt.hpMod > 0 ? '+' : ''}${opt.hpMod} REL:${opt.relMod}`, W - 120, py + 14, canAfford ? COLORS.green : COLORS.red);
+    drawText(`$${opt.cost}`, W - 50, py + 14, canAfford ? COLORS.green : COLORS.red);
+
+    py += 26;
+  }
+
+  // Back button
+  drawButton(5, H - 14, 30, 12, 'BACK',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+function drawSuspensionTuneScreen() {
+  const car = gameData.cars[currentCarIdx];
+
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Header
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('SUSPENSION TUNING', 5, 10, COLORS.accent);
+  drawText(`$${gameData.cash}`, W - 40, 10, COLORS.green);
+
+  // Car preview
+  drawCar(260, 50, car.colorIdx, car.bodyStyle, 0.8);
+
+  // Current suspension stats
+  drawPanel(5, 18, W - 70, 24);
+  drawText(`Current Grip: ${car.getEffectiveGrip()} | Weight: ${car.getEffectiveWeight()}`, 10, 28, COLORS.text);
+  drawText(`Suspension: ${car.suspensionLevel || 'Stock'}`, 10, 40, COLORS.dimText);
+
+  // Tune options
+  let py = 50;
+  for (let i = 0; i < TUNE_OPTIONS.suspension.length; i++) {
+    const opt = TUNE_OPTIONS.suspension[i];
+    const hover = mouse.x >= 10 && mouse.x <= W - 75 && mouse.y >= py && mouse.y <= py + 24;
+    const canAfford = gameData.cash >= opt.cost;
+
+    drawPanel(10, py, W - 85, 24);
+    if (hover && canAfford) {
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(9.5, py - 0.5, W - 83, 25);
+    }
+
+    drawText(`${opt.name}`, 16, py + 9, canAfford ? COLORS.text : COLORS.dimText);
+    drawText(`${opt.desc}`, 16, py + 18, COLORS.dimText);
+    drawText(`GRP:${opt.gripMod > 0 ? '+' : ''}${opt.gripMod} REL:${opt.relMod}`, W - 120, py + 14, canAfford ? COLORS.green : COLORS.red);
+    drawText(`$${opt.cost}`, W - 50, py + 14, canAfford ? COLORS.green : COLORS.red);
+
+    py += 26;
+  }
+
+  // Back button
+  drawButton(5, H - 14, 30, 12, 'BACK',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+function drawBrakeTuneScreen() {
+  const car = gameData.cars[currentCarIdx];
+
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Header
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('BRAKE TUNING', 5, 10, COLORS.accent);
+  drawText(`$${gameData.cash}`, W - 40, 10, COLORS.green);
+
+  // Car preview
+  drawCar(260, 50, car.colorIdx, car.bodyStyle, 0.8);
+
+  // Current brake stats
+  drawPanel(5, 18, W - 70, 24);
+  drawText(`Current Reliability: ${car.getEffectiveReliability()}%`, 10, 28, COLORS.text);
+  drawText(`Brakes: ${car.brakeLevel || 'Stock'}`, 10, 40, COLORS.dimText);
+
+  // Tune options
+  let py = 50;
+  for (let i = 0; i < TUNE_OPTIONS.brakes.length; i++) {
+    const opt = TUNE_OPTIONS.brakes[i];
+    const hover = mouse.x >= 10 && mouse.x <= W - 75 && mouse.y >= py && mouse.y <= py + 24;
+    const canAfford = gameData.cash >= opt.cost;
+
+    drawPanel(10, py, W - 85, 24);
+    if (hover && canAfford) {
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(9.5, py - 0.5, W - 83, 25);
+    }
+
+    drawText(`${opt.name}`, 16, py + 9, canAfford ? COLORS.text : COLORS.dimText);
+    drawText(`${opt.desc}`, 16, py + 18, COLORS.dimText);
+    drawText(`REL:${opt.relMod > 0 ? '+' : ''}${opt.relMod}`, W - 120, py + 14, canAfford ? COLORS.green : COLORS.red);
+    drawText(`$${opt.cost}`, W - 50, py + 14, canAfford ? COLORS.green : COLORS.red);
+
+    py += 26;
+  }
+
+  // Back button
+  drawButton(5, H - 14, 30, 12, 'BACK',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+function drawRepairScreen() {
+  const car = gameData.cars[currentCarIdx];
+
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Header
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('REPAIRS & MAINTENANCE', 5, 10, COLORS.accent);
+  drawText(`$${gameData.cash}`, W - 40, 10, COLORS.green);
+
+  // Car preview
+  drawCar(260, 50, car.colorIdx, car.bodyStyle, 0.8);
+
+  // Current condition
+  drawPanel(5, 18, W - 70, 24);
+  drawText(`Condition: ${car.condition}%`, 10, 28, car.condition > 50 ? COLORS.green : COLORS.red);
+  drawText(`Reliability: ${car.getEffectiveReliability()}%`, 10, 40, COLORS.lightGray);
+
+  // Condition bar
+  drawRect(10, 48, W - 90, 6, '#2a3040');
+  drawRect(10, 48, (W - 90) * car.condition / 100, 6,
+    car.condition > 50 ? COLORS.green : car.condition > 25 ? COLORS.orange : COLORS.red);
+
+  // Repair options
+  let py = 62;
+  for (let i = 0; i < TUNE_OPTIONS.repairs.length; i++) {
+    const opt = TUNE_OPTIONS.repairs[i];
+    const hover = mouse.x >= 10 && mouse.x <= W - 75 && mouse.y >= py && mouse.y <= py + 24;
+    const canAfford = gameData.cash >= opt.cost;
+
+    drawPanel(10, py, W - 85, 24);
+    if (hover && canAfford) {
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(9.5, py - 0.5, W - 83, 25);
+    }
+
+    drawText(`${opt.name}`, 16, py + 9, canAfford ? COLORS.text : COLORS.dimText);
+    drawText(`${opt.desc}`, 16, py + 18, COLORS.dimText);
+    drawText(`COND:${opt.condMod > 0 ? '+' : ''}${opt.condMod}%`, W - 120, py + 14, canAfford ? COLORS.green : COLORS.red);
+    drawText(`$${opt.cost}`, W - 50, py + 14, canAfford ? COLORS.green : COLORS.red);
+
+    py += 26;
+  }
+
+  // Back button
+  drawButton(5, H - 14, 30, 12, 'BACK',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+// ============================================================
+// CLICK HANDLER
+// ============================================================
+function handleClick(mx, my) {
+  initAudio();
+
+  if (tuneState === 'main') {
+    // Car selector clicks
+    if (gameData.cars.length > 1) {
+      for (let i = 0; i < gameData.cars.length; i++) {
+        const x = 30 + i * 75;
+        if (mx >= x && mx <= x + 70 && my >= 18 && my <= 26) {
+          sfxClick();
+          currentCarIdx = i;
+          gameData.currentCarIdx = i;
+          saveGame();
+          return;
+        }
+      }
+    }
+
+    // Tune option buttons
+    const car = gameData.cars[currentCarIdx];
+    if (car) {
+      // Tune Engine
+      if (mx >= 100 && mx <= 220 && my >= 130 && my <= 144) {
+        sfxClick();
+        tuneState = 'engineTune';
+      }
+      // Tune Suspension
+      else if (mx >= 100 && mx <= 220 && my >= 148 && my <= 162) {
+        sfxClick();
+        tuneState = 'suspensionTune';
+      }
+      // Repairs
+      else if (mx >= 100 && mx <= 220 && my >= 166 && my <= 180) {
+        sfxClick();
+        tuneState = 'repair';
+      }
+      // Tune Brakes
+      else if (mx >= 100 && mx <= 220 && my >= 184 && my <= 198) {
+        sfxClick();
+        tuneState = 'brakeTune';
+      }
+    }
+
+    // Menu button
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      window.location.href = 'index.html';
+    }
+  } else if (tuneState === 'engineTune') {
+    const car = gameData.cars[currentCarIdx];
+
+    // Check tune option clicks
+    let py = 50;
+    for (let i = 0; i < TUNE_OPTIONS.engine.length; i++) {
+      const opt = TUNE_OPTIONS.engine[i];
+      if (mx >= 10 && mx <= W - 75 && my >= py && my <= py + 24) {
+        if (gameData.cash >= opt.cost) {
+          sfxTune();
+          gameData.cash -= opt.cost;
+
+          // Apply tune effects
+          car.tuneLevel = (car.tuneLevel || 0) + 1;
+          car.baseHP += opt.hpMod;
+          car.reliability = Math.max(5, Math.min(100, car.reliability + opt.relMod));
+
+          sfxCash();
+          saveGame();
+        } else {
+          sfxError();
+        }
+        return;
+      }
+      py += 26;
+    }
+
+    // Back button
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      tuneState = 'main';
+    }
+  } else if (tuneState === 'suspensionTune') {
+    const car = gameData.cars[currentCarIdx];
+
+    let py = 50;
+    for (let i = 0; i < TUNE_OPTIONS.suspension.length; i++) {
+      const opt = TUNE_OPTIONS.suspension[i];
+      if (mx >= 10 && mx <= W - 75 && my >= py && my <= py + 24) {
+        if (gameData.cash >= opt.cost) {
+          sfxTune();
+          gameData.cash -= opt.cost;
+
+          car.suspensionLevel = (car.suspensionLevel || 0) + 1;
+          car.baseGrip += opt.gripMod;
+          car.reliability = Math.max(5, Math.min(100, car.reliability + opt.relMod));
+
+          sfxCash();
+          saveGame();
+        } else {
+          sfxError();
+        }
+        return;
+      }
+      py += 26;
+    }
+
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      tuneState = 'main';
+    }
+  } else if (tuneState === 'brakeTune') {
+    const car = gameData.cars[currentCarIdx];
+
+    let py = 50;
+    for (let i = 0; i < TUNE_OPTIONS.brakes.length; i++) {
+      const opt = TUNE_OPTIONS.brakes[i];
+      if (mx >= 10 && mx <= W - 75 && my >= py && my <= py + 24) {
+        if (gameData.cash >= opt.cost) {
+          sfxTune();
+          gameData.cash -= opt.cost;
+
+          car.brakeLevel = (car.brakeLevel || 0) + 1;
+          car.reliability = Math.max(5, Math.min(100, car.reliability + opt.relMod));
+
+          sfxCash();
+          saveGame();
+        } else {
+          sfxError();
+        }
+        return;
+      }
+      py += 26;
+    }
+
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      tuneState = 'main';
+    }
+  } else if (tuneState === 'repair') {
+    const car = gameData.cars[currentCarIdx];
+
+    let py = 62;
+    for (let i = 0; i < TUNE_OPTIONS.repairs.length; i++) {
+      const opt = TUNE_OPTIONS.repairs[i];
+      if (mx >= 10 && mx <= W - 75 && my >= py && my <= py + 24) {
+        if (gameData.cash >= opt.cost) {
+          sfxRepair();
+          gameData.cash -= opt.cost;
+
+          car.condition = Math.min(100, car.condition + opt.condMod);
+
+          sfxCash();
+          saveGame();
+        } else {
+          sfxError();
+        }
+        return;
+      }
+      py += 26;
+    }
+
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      tuneState = 'main';
+    }
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+function gameLoop() {
+  frameCount++;
+
+  if (tuneState === 'main') drawMainTuneScreen();
+  else if (tuneState === 'engineTune') drawEngineTuneScreen();
+  else if (tuneState === 'suspensionTune') drawSuspensionTuneScreen();
+  else if (tuneState === 'brakeTune') drawBrakeTuneScreen();
+  else if (tuneState === 'repair') drawRepairScreen();
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
+

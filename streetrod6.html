@@ -1,0 +1,1586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Street Garage '89</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: monospace;
+  overflow: hidden;
+}
+#gameCanvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: 2px solid #444;
+  cursor: pointer;
+}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="320" height="240"></canvas>
+<script>
+// ============================================================
+// STREET GARAGE '89 - Complete Single-File Game
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = 320, H = 240;
+
+// Scale canvas to fit screen
+function resizeCanvas() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H) * 0.95;
+  canvas.style.width = Math.floor(W * scale) + 'px';
+  canvas.style.height = Math.floor(H * scale) + 'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ============================================================
+// COLORS (EGA/VGA palette)
+// ============================================================
+const C = {
+  bg: '#1a1a2e', darkBg: '#0f0f1a', panel: '#2a2a3e',
+  border: '#556688', lightBorder: '#7788aa',
+  text: '#ccccdd', dimText: '#667788', brightText: '#ffffff',
+  red: '#cc3333', green: '#33cc55', yellow: '#cccc33',
+  orange: '#cc8833', blue: '#3366cc', cyan: '#33cccc',
+  magenta: '#cc33cc', brown: '#886644', gray: '#555566',
+  darkGray: '#333344', white: '#eeeeff'
+};
+
+// ============================================================
+// AUDIO MANAGER (Web Audio API)
+// ============================================================
+let audioCtx = null;
+let muted = false;
+
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function playTone(freq, duration, type = 'square', vol = 0.1) {
+  if (muted || !audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+}
+
+function sfxClick() { playTone(800, 0.05); }
+function sfxSelect() { playTone(600, 0.1); playTone(900, 0.1); }
+function sfxCash() { playTone(1200, 0.08); setTimeout(() => playTone(1600, 0.12), 80); }
+function sfxError() { playTone(200, 0.15); }
+function sfxWrench() { playTone(300, 0.05); setTimeout(() => playTone(400, 0.05), 60); }
+function sfxEngine() {
+  if (muted || !audioCtx) return;
+  for (let i = 0; i < 5; i++) {
+    setTimeout(() => playTone(80 + Math.random() * 40, 0.15, 'sawtooth', 0.06), i * 80);
+  }
+}
+function sfxRaceBeep(high) { playTone(high ? 880 : 440, 0.2); }
+function sfxWin() { [523,659,784,1047].forEach((f,i) => setTimeout(() => playTone(f, 0.2), i*120)); }
+function sfxLose() { [400,350,300,250].forEach((f,i) => setTimeout(() => playTone(f, 0.25), i*150)); }
+
+// ============================================================
+// DATA TABLES
+// ============================================================
+const CAR_TEMPLATES = [
+  { name: 'Vulture Falcon', year: 1966, baseHP: 140, weight: 2800, grip: 55, reliability: 60, value: 1200, colorIdx: 0 },
+  { name: 'Bravado 440', year: 1969, baseHP: 280, weight: 3400, grip: 50, reliability: 55, value: 2800, colorIdx: 1 },
+  { name: 'Kodiak GT', year: 1971, baseHP: 200, weight: 3100, grip: 65, reliability: 70, value: 2200, colorIdx: 2 },
+  { name: 'Sparrow Coupe', year: 1974, baseHP: 110, weight: 2200, grip: 70, reliability: 80, value: 900, colorIdx: 3 },
+  { name: 'Ironhorse Fastback', year: 1968, baseHP: 240, weight: 3200, grip: 58, reliability: 62, value: 2400, colorIdx: 4 },
+  { name: 'Peregrine Sport', year: 1973, baseHP: 160, weight: 2500, grip: 72, reliability: 75, value: 1600, colorIdx: 5 },
+  { name: 'Thunderbolt V8', year: 1970, baseHP: 320, weight: 3600, grip: 45, reliability: 48, value: 3200, colorIdx: 6 },
+  { name: 'Roadrunner GT', year: 1975, baseHP: 130, weight: 2400, grip: 68, reliability: 78, value: 1100, colorIdx: 7 },
+  { name: 'Coyote Mach', year: 1967, baseHP: 260, weight: 3000, grip: 52, reliability: 58, value: 2600, colorIdx: 8 },
+  { name: 'Mustang II', year: 1976, baseHP: 100, weight: 2100, grip: 75, reliability: 85, value: 800, colorIdx: 9 },
+];
+
+const CAR_COLORS = [
+  ['#cc3333','#aa2222','#ee4444'], // red
+  ['#cc8833','#aa7722','#dd9944'], // orange
+  ['#3366cc','#2255aa','#4477dd'], // blue
+  ['#33cc55','#22aa44','#44dd66'], // green
+  ['#cccc33','#bbbb22','#dddd44'], // yellow
+  ['#cc33cc','#aa22aa','#dd44dd'], // magenta
+  ['#886644','#775533','#997755'], // brown
+  ['#6688aa','#557799','#7799bb'], // steel
+  ['#aaaaaa','#888888','#cccccc'], // silver
+  ['#222233','#111122','#333344'], // black
+];
+
+const PARTS_CATEGORIES = [
+  { id: 'carb', name: 'Carburetor', statMod: 'hp', desc: 'Increases horsepower' },
+  { id: 'intake', name: 'Intake Manifold', statMod: 'hp', desc: 'Improves airflow' },
+  { id: 'exhaust', name: 'Exhaust System', statMod: 'hp', desc: 'Reduces backpressure' },
+  { id: 'camshaft', name: 'Camshaft', statMod: 'hp', desc: 'Better valve timing' },
+  { id: 'tires', name: 'Tires', statMod: 'grip', desc: 'Improves traction' },
+  { id: 'transmission', name: 'Transmission', statMod: 'hp', desc: 'Faster shifts' },
+  { id: 'differential', name: 'Differential', statMod: 'grip', desc: 'Better power delivery' },
+  { id: 'weight', name: 'Weight Reduction', statMod: 'weight', desc: 'Lighter car' },
+  { id: 'cooling', name: 'Cooling System', statMod: 'reliability', desc: 'Prevents overheating' },
+  { id: 'brakes', name: 'Brakes', statMod: 'reliability', desc: 'Better stopping' },
+];
+
+const PART_TIERS = [
+  { name: 'Stock', cost: 0, hpMod: 0, gripMod: 0, weightMod: 0, relMod: 0 },
+  { name: 'Aftermarket', cost: 200, hpMod: 15, gripMod: 5, weightMod: -20, relMod: -3 },
+  { name: 'Performance', cost: 500, hpMod: 35, gripMod: 12, weightMod: -40, relMod: -8 },
+  { name: 'Race Spec', cost: 1000, hpMod: 60, gripMod: 20, weightMod: -70, relMod: -15 },
+];
+
+const RACES = [
+  { name: 'Back Alley Quarter', distance: 402, minRep: 0, prize: 300, difficulty: 1 },
+  { name: 'Highway Sprint', distance: 804, minRep: 5, prize: 600, difficulty: 2 },
+  { name: 'Industrial Park', distance: 1609, minRep: 15, prize: 1200, difficulty: 3 },
+  { name: 'Coastal Run', distance: 2414, minRep: 30, prize: 2500, difficulty: 4 },
+  { name: 'Midnight Mile', distance: 1609, minRep: 50, prize: 4000, difficulty: 5 },
+];
+
+const SELLER_NAMES = ['Mike', 'Tony', 'Sal', 'Big Al', 'Rusty', 'Vinnie', 'Duke', 'Pops', 'Slick', 'Red'];
+const SELLER_TRAITS = ['firm', 'desperate', 'haggler', 'knowledgeable'];
+
+// ============================================================
+// GAME STATE
+// ============================================================
+let gameState = {
+  screen: 'title', // title, classifieds, garage, parts, racing, saveLoad
+  cash: 3500,
+  reputation: 0,
+  day: 1,
+  cars: [],
+  currentCarIdx: 0,
+  classifieds: [],
+  selectedListing: -1,
+  negotiationOffer: 0,
+  sellerFirmness: 5,
+  partsScreen: 'list', // list, install
+  selectedPartCat: -1,
+  raceState: 'select', // select, countdown, racing, result
+  selectedRace: -1,
+  raceProgress: { player: 0, opponent: 0 },
+  raceTimer: 0,
+  raceResult: '',
+  raceOpponentHP: 0,
+  garageTab: 'overview', // overview, tune, repair
+  mouseX: 0, mouseY: 0,
+  mouseDown: false,
+  hoverBtn: -1,
+  animFrame: 0,
+  message: '',
+  messageTimer: 0,
+};
+
+// ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
+function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function generateClassifieds() {
+  const listings = [];
+  const count = rand(6, 10);
+  for (let i = 0; i < count; i++) {
+    const tmpl = CAR_TEMPLATES[rand(0, CAR_TEMPLATES.length - 1)];
+    const condition = rand(30, 95);
+    const mileage = rand(20000, 180000);
+    const hiddenIssues = rand(0, 3);
+    const sellerTrait = SELLER_TRAITS[rand(0, SELLER_TRAITS.length - 1)];
+    const firmness = sellerTrait === 'firm' ? rand(7, 10) :
+                     sellerTrait === 'desperate' ? rand(1, 3) :
+                     sellerTrait === 'haggler' ? rand(4, 6) : rand(5, 7);
+    const priceMod = condition / 100 * (1 - hiddenIssues * 0.05);
+    const askingPrice = Math.floor(tmpl.value * priceMod * rand(80, 130) / 100);
+
+    listings.push({
+      id: i,
+      template: tmpl,
+      year: tmpl.year + rand(-2, 3),
+      name: tmpl.name,
+      condition: condition,
+      mileage: mileage,
+      hiddenIssues: hiddenIssues,
+      askingPrice: Math.max(200, askingPrice),
+      sellerName: SELLER_NAMES[rand(0, SELLER_NAMES.length - 1)],
+      sellerTrait: sellerTrait,
+      firmness: firmness,
+      colorIdx: tmpl.colorIdx,
+    });
+  }
+  return listings;
+}
+
+function createCarFromListing(listing) {
+  const tmpl = listing.template;
+  return {
+    name: `${listing.year} ${tmpl.name}`,
+    year: listing.year,
+    colorIdx: tmpl.colorIdx,
+    baseHP: tmpl.baseHP + rand(-10, 10),
+    weight: tmpl.weight + rand(-100, 100),
+    grip: tmpl.grip + rand(-5, 5),
+    reliability: tmpl.reliability + rand(-10, 10),
+    condition: listing.condition - listing.hiddenIssues * 8,
+    value: Math.floor(listing.askingPrice * 0.9),
+    parts: {},
+    tuneLevel: 0,
+    suspensionTune: 0,
+    brakeTune: 0,
+  };
+}
+
+function getEffectiveStats(car) {
+  let hp = car.baseHP;
+  let grip = car.grip;
+  let weight = car.weight;
+  let rel = car.reliability;
+
+  for (const [catId, tierIdx] of Object.entries(car.parts)) {
+    const cat = PARTS_CATEGORIES.find(c => c.id === catId);
+    if (!cat || tierIdx < 1) continue;
+    const tier = PART_TIERS[tierIdx];
+    if (cat.statMod === 'hp') hp += tier.hpMod;
+    else if (cat.statMod === 'grip') grip += tier.gripMod;
+    else if (cat.statMod === 'weight') weight += tier.weightMod;
+    else if (cat.statMod === 'reliability') rel += tier.relMod;
+  }
+
+  // Tune bonuses
+  hp += car.tuneLevel * 8;
+  grip += car.suspensionTune * 3;
+  rel += car.brakeTune * 2;
+
+  return { hp: Math.max(50, hp), grip: clamp(grip, 20, 100), weight: Math.max(1500, weight), reliability: clamp(rel, 5, 100) };
+}
+
+function getPerformanceRating(car) {
+  const s = getEffectiveStats(car);
+  return Math.floor((s.hp / s.weight * 100 + s.grip) * car.condition / 100);
+}
+
+// ============================================================
+// DRAWING HELPERS
+// ============================================================
+function drawRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.floor(x), Math.floor(y), Math.ceil(w), Math.ceil(h));
+}
+
+function drawBorder(x, y, w, h, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(Math.floor(x) + 0.5, Math.floor(y) + 0.5, w - 1, h - 1);
+}
+
+function drawText(text, x, y, color = C.text, size = 8) {
+  ctx.fillStyle = color;
+  ctx.font = `${size}px monospace`;
+  ctx.textBaseline = 'top';
+  ctx.fillText(text, Math.floor(x), Math.floor(y));
+}
+
+function drawTextCentered(text, x, y, color = C.text, size = 8) {
+  ctx.fillStyle = color;
+  ctx.font = `${size}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(text, Math.floor(x), Math.floor(y));
+  ctx.textAlign = 'left';
+}
+
+function drawButton(x, y, w, h, text, hover = false) {
+  const bgColor = hover ? C.lightBorder : C.darkGray;
+  const textColor = hover ? C.white : C.text;
+  drawRect(x, y, w, h, bgColor);
+  drawBorder(x, y, w, h, hover ? C.white : C.border);
+  drawTextCentered(text, x + w / 2, y + h / 2 - 4, textColor);
+}
+
+function drawBar(x, y, w, h, value, maxVal, color) {
+  const pct = clamp(value / maxVal, 0, 1);
+  drawRect(x, y, w, h, C.darkGray);
+  drawRect(x + 1, y + 1, Math.floor((w - 2) * pct), h - 2, color);
+  drawBorder(x, y, w, h, C.border);
+}
+
+function drawPixelCar(cx, cy, colorIdx, scale = 1) {
+  const colors = CAR_COLORS[colorIdx] || CAR_COLORS[0];
+  const body = colors[0], dark = colors[1], light = colors[2];
+  const s = scale;
+
+  ctx.save();
+  ctx.translate(Math.floor(cx), Math.floor(cy));
+
+  // Shadow
+  drawRect(-40 * s, 28 * s, 80 * s, 4 * s, '#111');
+
+  // Wheels
+  drawRect(-32 * s, 18 * s, 14 * s, 14 * s, '#222');
+  drawRect(-30 * s, 20 * s, 10 * s, 10 * s, '#444');
+  drawRect(-30 * s, 20 * s, 10 * s, 10 * s, '#333');
+  drawRect(20 * s, 18 * s, 14 * s, 14 * s, '#222');
+  drawRect(22 * s, 20 * s, 10 * s, 10 * s, '#444');
+  drawRect(22 * s, 20 * s, 10 * s, 10 * s, '#333');
+
+  // Wheel hubs
+  drawRect(-27 * s, 23 * s, 4 * s, 4 * s, '#666');
+  drawRect(25 * s, 23 * s, 4 * s, 4 * s, '#666');
+
+  // Body lower
+  drawRect(-38 * s, 10 * s, 76 * s, 12 * s, body);
+  drawRect(-38 * s, 10 * s, 76 * s, 2 * s, dark);
+
+  // Body upper / cabin
+  drawRect(-18 * s, -4 * s, 36 * s, 14 * s, body);
+  drawRect(-16 * s, -2 * s, 32 * s, 2 * s, dark);
+
+  // Windows
+  drawRect(-14 * s, -2 * s, 12 * s, 8 * s, '#4466aa');
+  drawRect(2 * s, -2 * s, 14 * s, 8 * s, '#4466aa');
+  drawRect(-12 * s, -1 * s, 8 * s, 6 * s, '#5577bb');
+  drawRect(4 * s, -1 * s, 10 * s, 6 * s, '#5577bb');
+
+  // Hood
+  drawRect(-38 * s, 6 * s, 20 * s, 4 * s, light);
+  drawRect(-38 * s, 6 * s, 20 * s, 1 * s, dark);
+
+  // Trunk
+  drawRect(20 * s, 6 * s, 18 * s, 4 * s, light);
+  drawRect(20 * s, 6 * s, 18 * s, 1 * s, dark);
+
+  // Headlights
+  drawRect(-38 * s, 12 * s, 3 * s, 4 * s, '#ffffaa');
+  drawRect(-38 * s, 12 * s, 1 * s, 4 * s, '#ffffcc');
+
+  // Taillights
+  drawRect(37 * s, 12 * s, 3 * s, 4 * s, '#cc2222');
+  drawRect(37 * s, 12 * s, 1 * s, 4 * s, '#ff3333');
+
+  // Bumpers
+  drawRect(-40 * s, 20 * s, 4 * s, 3 * s, '#888');
+  drawRect(36 * s, 20 * s, 4 * s, 3 * s, '#888');
+
+  // Side details
+  drawRect(-20 * s, 14 * s, 40 * s, 1 * s, dark);
+  drawRect(-30 * s, 8 * s, 60 * s, 1 * s, dark);
+
+  ctx.restore();
+}
+
+// ============================================================
+// SCREEN RENDERERS
+// ============================================================
+
+function drawTitleScreen() {
+  drawRect(0, 0, W, H, C.bg);
+
+  // Title
+  drawTextCentered('STREET GARAGE', W / 2, 40, C.yellow, 16);
+  drawTextCentered("'89", W / 2, 58, C.orange, 14);
+
+  // Decorative line
+  drawRect(60, 75, W - 120, 2, C.border);
+
+  // Car preview
+  drawPixelCar(W / 2, 110, rand(0, CAR_COLORS.length - 1), 1.5);
+
+  // Menu buttons
+  const btnW = 120, btnH = 18;
+  const bx = (W - btnW) / 2;
+
+  drawButton(bx, 150, btnW, btnH, 'NEW GAME',
+    gameState.mouseX >= bx && gameState.mouseX <= bx + btnW &&
+    gameState.mouseY >= 150 && gameState.mouseY <= 150 + btnH);
+
+  drawButton(bx, 172, btnW, btnH, 'LOAD GAME',
+    gameState.mouseX >= bx && gameState.mouseX <= bx + btnW &&
+    gameState.mouseY >= 172 && gameState.mouseY <= 172 + btnH);
+
+  drawButton(bx, 194, btnW, btnH, 'CONTROLS',
+    gameState.mouseX >= bx && gameState.mouseX <= bx + btnW &&
+    gameState.mouseY >= 194 && gameState.mouseY <= 194 + btnH);
+
+  // Controls hint
+  drawTextCentered('[M] Mute', W / 2, 218, C.dimText, 7);
+}
+
+function drawNavMenu() {
+  // Top bar
+  drawRect(0, 0, W, 20, C.darkBg);
+  drawBorder(0, 0, W, 20, C.border);
+
+  // Cash display
+  drawText(`$${gameState.cash}`, 5, 4, C.green, 9);
+  drawText(`REP:${gameState.reputation}`, 70, 4, C.yellow, 9);
+  drawText(`DAY ${gameState.day}`, 140, 4, C.dimText, 9);
+
+  // Navigation buttons
+  const navBtns = [
+    { label: 'ADS', screen: 'classifieds' },
+    { label: 'GARAGE', screen: 'garage', req: gameState.cars.length > 0 },
+    { label: 'PARTS', screen: 'parts', req: gameState.cars.length > 0 },
+    { label: 'RACES', screen: 'racing', req: gameState.cars.length > 0 },
+    { label: 'SAVE', screen: 'saveLoad' },
+  ];
+
+  let nx = 180;
+  for (const btn of navBtns) {
+    const bw = btn.label.length * 6 + 10;
+    const active = gameState.screen === btn.screen;
+    const hover = gameState.mouseX >= nx && gameState.mouseX <= nx + bw &&
+                  gameState.mouseY >= 2 && gameState.mouseY <= 18;
+
+    if (btn.req === false) {
+      drawText(btn.label, nx + 3, 5, C.dimText, 7);
+    } else {
+      const bgColor = active ? C.blue : (hover ? C.lightBorder : C.darkGray);
+      drawRect(nx, 2, bw, 16, bgColor);
+      drawBorder(nx, 2, bw, 16, active ? C.white : (hover ? C.white : C.border));
+      drawText(btn.label, nx + 4, 5, active ? C.white : (hover ? C.brightText : C.text), 7);
+    }
+    nx += bw + 4;
+  }
+
+  // Car indicator if owned
+  if (gameState.cars.length > 0) {
+    const car = gameState.cars[gameState.currentCarIdx];
+    drawText(`CAR: ${car.name}`, 5, 120, C.cyan, 7);
+  }
+}
+
+function drawClassifiedsScreen() {
+  drawRect(0, 20, W, H - 20, C.bg);
+
+  // Header
+  drawRect(5, 24, W - 10, 16, C.panel);
+  drawBorder(5, 24, W - 10, 16, C.border);
+  drawTextCentered('CLASSIFIED ADS - USED CARS', W / 2, 27, C.yellow, 9);
+
+  // Listings
+  const startY = 46;
+  const listingH = 38;
+
+  for (let i = 0; i < gameState.classifieds.length; i++) {
+    const listing = gameState.classifieds[i];
+    const ly = startY + i * (listingH + 4);
+
+    if (ly > H - 30) break;
+
+    const selected = gameState.selectedListing === i;
+    const hover = gameState.mouseX >= 8 && gameState.mouseX <= W - 8 &&
+                  gameState.mouseY >= ly && gameState.mouseY <= ly + listingH;
+
+    drawRect(8, ly, W - 16, listingH, selected ? C.blue : (hover ? C.panel : C.darkBg));
+    drawBorder(8, ly, W - 16, listingH, selected ? C.white : (hover ? C.lightBorder : C.border));
+
+    // Listing info
+    drawText(`${listing.year} ${listing.name}`, 14, ly + 3, selected ? C.white : C.text, 8);
+    drawText(`Price: $${listing.askingPrice}`, 14, ly + 13, listing.askingPrice <= gameState.cash ? C.green : C.red, 7);
+    drawText(`Cond: ${listing.condition}%`, 140, ly + 3, listing.condition > 70 ? C.green : (listing.condition > 40 ? C.yellow : C.red), 7);
+    drawText(`Miles: ${listing.mileage}`, 140, ly + 13, C.dimText, 7);
+    drawText(`Seller: ${listing.sellerName}`, 210, ly + 3, C.cyan, 7);
+    drawText(`[${listing.sellerTrait}]`, 210, ly + 13, C.dimText, 7);
+
+    // Action buttons
+    if (selected) {
+      drawButton(W - 80, ly + 16, 35, 14, 'INSPECT',
+        gameState.mouseX >= W - 80 && gameState.mouseY >= ly + 16);
+      drawButton(W - 42, ly + 16, 35, 14, 'BUY',
+        gameState.mouseX >= W - 42 && gameState.mouseY >= ly + 16);
+    }
+  }
+
+  // Refresh button
+  drawButton(5, H - 24, 60, 18, 'REFRESH',
+    gameState.mouseX >= 5 && gameState.mouseX <= 65 &&
+    gameState.mouseY >= H - 24 && gameState.mouseY <= H - 6);
+
+  // Inspect/Buy overlay
+  if (gameState.selectedListing >= 0) {
+    const listing = gameState.classifieds[gameState.selectedListing];
+    drawRect(60, 44, W - 120, H - 80, C.darkBg);
+    drawBorder(60, 44, W - 120, H - 80, C.yellow);
+
+    drawTextCentered(`${listing.year} ${listing.name}`, W / 2, 50, C.yellow, 10);
+    drawPixelCar(W / 2, 85, listing.colorIdx, 1.2);
+
+    drawText(`Asking: $${listing.askingPrice}`, 70, 120, C.text, 8);
+    drawText(`Condition: ${listing.condition}%`, 70, 132, C.text, 8);
+    drawText(`Mileage: ${listing.mileage.toLocaleString()}`, 70, 144, C.text, 8);
+    drawText(`Seller: ${listing.sellerName} (${listing.sellerTrait})`, 70, 156, C.text, 8);
+
+    // Negotiation
+    drawText(`Your Offer: $`, 70, 172, C.text, 8);
+    drawRect(130, 170, 60, 14, C.darkGray);
+    drawText(`${gameState.negotiationOffer}`, 132, 172, C.green, 8);
+
+    drawButton(70, 190, 50, 14, 'LOWER',
+      gameState.mouseX >= 70 && gameState.mouseY >= 190);
+    drawButton(125, 190, 50, 14, 'RAISE',
+      gameState.mouseX >= 125 && gameState.mouseY >= 190);
+
+    drawButton(180, 190, 50, 14, 'OFFER',
+      gameState.mouseX >= 180 && gameState.mouseY >= 190);
+
+    drawButton(235, 190, 40, 14, 'CLOSE',
+      gameState.mouseX >= 235 && gameState.mouseY >= 190);
+
+    // Negotiation result
+    if (gameState.messageTimer > 0) {
+      drawTextCentered(gameState.message, W / 2, 210, gameState.message.includes('sold') ? C.green : C.red, 8);
+    }
+  }
+}
+
+function drawGarageScreen() {
+  if (gameState.cars.length === 0) return;
+
+  drawRect(0, 20, W, H - 20, C.bg);
+  const car = gameState.cars[gameState.currentCarIdx];
+  const stats = getEffectiveStats(car);
+
+  // Garage background elements
+  drawRect(0, 20, W, H - 20, '#1a1a2e');
+
+  // Floor
+  drawRect(0, H - 40, W, 40, '#2a2520');
+  drawRect(0, H - 40, W, 2, '#3a3530');
+
+  // Oil stains
+  drawRect(40, H - 25, 15, 8, '#1a1510');
+  drawRect(200, H - 30, 20, 10, '#1a1510');
+  drawRect(150, H - 20, 12, 6, '#1a1510');
+
+  // Shelves on wall
+  drawRect(10, 30, 60, 4, C.brown);
+  drawRect(15, 34, 8, 12, '#665544');
+  drawRect(30, 34, 10, 8, '#776655');
+  drawRect(45, 34, 12, 10, '#554433');
+
+  drawRect(W - 70, 30, 60, 4, C.brown);
+  drawRect(W - 65, 34, 10, 14, '#665544');
+  drawRect(W - 50, 34, 8, 10, '#776655');
+
+  // Tool chest
+  drawRect(W - 30, H - 65, 25, 25, '#445566');
+  drawBorder(W - 30, H - 65, 25, 25, '#556677');
+  drawRect(W - 28, H - 63, 21, 4, '#556677');
+  drawRect(W - 28, H - 57, 21, 4, '#556677');
+  drawRect(W - 28, H - 51, 21, 4, '#556677');
+
+  // Posters
+  drawRect(80, 25, 30, 20, '#334455');
+  drawBorder(80, 25, 30, 20, '#445566');
+  drawTextCentered('RACE', 95, 32, '#667788', 6);
+
+  drawRect(120, 25, 30, 20, '#443355');
+  drawBorder(120, 25, 30, 20, '#554466');
+  drawTextCentered('TUNE', 135, 32, '#667788', 6);
+
+  // Car display
+  drawPixelCar(W / 2, H - 70, car.colorIdx, 1.8);
+
+  // Stats panel
+  drawRect(5, H - 38, W - 10, 34, C.panel);
+  drawBorder(5, H - 38, W - 10, 34, C.border);
+
+  drawText(`HP:${stats.hp}`, 10, H - 34, C.text, 7);
+  drawText(`GRIP:${stats.grip}`, 60, H - 34, C.text, 7);
+  drawText(`WT:${stats.weight}`, 110, H - 34, C.text, 7);
+  drawText(`REL:${stats.reliability}%`, 160, H - 34, stats.reliability > 70 ? C.green : (stats.reliability > 40 ? C.yellow : C.red), 7);
+  drawText(`COND:${car.condition}%`, 210, H - 34, car.condition > 70 ? C.green : (car.condition > 40 ? C.yellow : C.red), 7);
+  drawText(`PERF:${getPerformanceRating(car)}`, 260, H - 34, C.cyan, 7);
+
+  // Garage tabs
+  const tabY = 24;
+  const tabs = ['OVERVIEW', 'TUNE', 'REPAIR'];
+  for (let i = 0; i < tabs.length; i++) {
+    const tx = 5 + i * 70;
+    const active = gameState.garageTab === ['overview', 'tune', 'repair'][i];
+    const hover = gameState.mouseX >= tx && gameState.mouseX <= tx + 68 &&
+                  gameState.mouseY >= tabY && gameState.mouseY <= tabY + 14;
+    drawButton(tx, tabY, 68, 14, tabs[i], active || hover);
+  }
+
+  // Tab content
+  if (gameState.garageTab === 'overview') {
+    drawRect(5, 42, W - 10, H - 80, C.darkBg);
+    drawBorder(5, 42, W - 10, H - 80, C.border);
+
+    drawText(`CAR: ${car.name}`, 12, 48, C.yellow, 9);
+    drawText(`Color: ${['Red','Orange','Blue','Green','Yellow','Magenta','Brown','Steel','Silver','Black'][car.colorIdx]}`, 12, 60, C.text, 7);
+
+    drawText(`BASE HP: ${car.baseHP}`, 12, 74, C.text, 7);
+    drawText(`EFFECTIVE HP: ${stats.hp}`, 12, 84, C.green, 7);
+
+    drawText(`BASE GRIP: ${car.grip}`, 12, 98, C.text, 7);
+    drawText(`EFFECTIVE GRIP: ${stats.grip}`, 12, 108, C.green, 7);
+
+    drawText(`WEIGHT: ${stats.weight} lbs`, 12, 122, C.text, 7);
+    drawText(`RELIABILITY: ${stats.reliability}%`, 12, 132, C.text, 7);
+    drawText(`CONDITION: ${car.condition}%`, 12, 142, C.text, 7);
+    drawText(`PERFORMANCE: ${getPerformanceRating(car)}`, 12, 152, C.cyan, 7);
+
+    // Parts installed
+    drawText('INSTALLED PARTS:', 12, 168, C.yellow, 7);
+    let py = 178;
+    for (const cat of PARTS_CATEGORIES) {
+      const tierIdx = car.parts[cat.id] || 0;
+      if (tierIdx > 0) {
+        drawText(`  ${cat.name}: ${PART_TIERS[tierIdx].name}`, 12, py, C.text, 7);
+        py += 9;
+      }
+    }
+
+    // Sell button
+    drawButton(W - 60, H - 78, 55, 14, 'SELL CAR',
+      gameState.mouseX >= W - 60 && gameState.mouseY >= H - 78);
+    drawText(`$${Math.floor(car.value * car.condition / 100)}`, W - 58, H - 62, C.green, 7);
+
+    // Multi-car selector
+    if (gameState.cars.length > 1) {
+      drawText('SELECT CAR:', 5, H - 78, C.dimText, 7);
+      for (let i = 0; i < gameState.cars.length; i++) {
+        const sx = 5 + i * 60;
+        const active = i === gameState.currentCarIdx;
+        drawButton(sx, H - 72, 56, 14, `CAR ${i + 1}`, active);
+      }
+    }
+  } else if (gameState.garageTab === 'tune') {
+    drawRect(5, 42, W - 10, H - 80, C.darkBg);
+    drawBorder(5, 42, W - 10, H - 80, C.border);
+
+    drawTextCentered('TUNE CAR', W / 2, 46, C.yellow, 9);
+
+    const tuneOptions = [
+      { label: 'ENGINE TUNE (+8 HP)', cost: 150, action: 'engine' },
+      { label: 'SUSPENSION TUNE (+3 GRIP)', cost: 120, action: 'suspension' },
+      { label: 'BRAKE TUNE (+2 REL)', cost: 100, action: 'brake' },
+      { label: 'FULL DETUNE (RESET)', cost: 0, action: 'detune' },
+    ];
+
+    let ty = 62;
+    for (const opt of tuneOptions) {
+      const canAfford = gameState.cash >= opt.cost;
+      drawText(opt.label, 15, ty, canAfford ? C.text : C.dimText, 8);
+      drawText(`$${opt.cost}`, W - 50, ty, canAfford ? C.green : C.red, 8);
+      drawButton(W - 45, ty + 2, 38, 12, 'TUNE',
+        gameState.mouseX >= W - 45 && gameState.mouseY >= ty + 2);
+      ty += 20;
+    }
+
+    drawText(`Tune Level: ${car.tuneLevel}`, 15, ty + 10, C.dimText, 7);
+    drawText(`Suspension: ${car.suspensionTune}`, 15, ty + 20, C.dimText, 7);
+    drawText(`Brakes: ${car.brakeTune}`, 15, ty + 30, C.dimText, 7);
+  } else if (gameState.garageTab === 'repair') {
+    drawRect(5, 42, W - 10, H - 80, C.darkBg);
+    drawBorder(5, 42, W - 10, H - 80, C.border);
+
+    drawTextCentered('REPAIR CAR', W / 2, 46, C.yellow, 9);
+
+    const repairOptions = [
+      { label: 'MINOR REPAIRS (+10 COND)', cost: 80, condMod: 10 },
+      { label: 'MAJOR REPAIRS (+25 COND)', cost: 200, condMod: 25 },
+      { label: 'FULL RESTORE (+50 COND)', cost: 500, condMod: 50 },
+    ];
+
+    let ry = 62;
+    for (const opt of repairOptions) {
+      const canAfford = gameState.cash >= opt.cost;
+      drawText(opt.label, 15, ry, canAfford ? C.text : C.dimText, 8);
+      drawText(`$${opt.cost}`, W - 50, ry, canAfford ? C.green : C.red, 8);
+      drawButton(W - 45, ry + 2, 38, 12, 'FIX',
+        gameState.mouseX >= W - 45 && gameState.mouseY >= ry + 2);
+      ry += 20;
+    }
+
+    drawText(`Current Condition: ${car.condition}%`, 15, ry + 10, C.text, 8);
+    drawBar(15, ry + 20, W - 30, 8, car.condition, 100,
+      car.condition > 70 ? C.green : (car.condition > 40 ? C.yellow : C.red));
+  }
+}
+
+function drawPartsScreen() {
+  if (gameState.cars.length === 0) return;
+
+  drawRect(0, 20, W, H - 20, C.bg);
+  const car = gameState.cars[gameState.currentCarIdx];
+
+  if (gameState.partsScreen === 'list') {
+    drawRect(5, 24, W - 10, 16, C.panel);
+    drawBorder(5, 24, W - 10, 16, C.border);
+    drawTextCentered('PARTS SHOP', W / 2, 27, C.yellow, 9);
+
+    let py = 46;
+    for (let i = 0; i < PARTS_CATEGORIES.length; i++) {
+      const cat = PARTS_CATEGORIES[i];
+      const currentTier = car.parts[cat.id] || 0;
+      const hover = gameState.mouseX >= 8 && gameState.mouseX <= W - 8 &&
+                    gameState.mouseY >= py && gameState.mouseY <= py + 16;
+
+      drawRect(8, py, W - 16, 16, hover ? C.panel : C.darkBg);
+      drawBorder(8, py, W - 16, 16, hover ? C.lightBorder : C.border);
+
+      drawText(cat.name, 14, py + 2, C.text, 8);
+      drawText(cat.desc, 14, py + 10, C.dimText, 6);
+      drawText(`Current: ${PART_TIERS[currentTier].name}`, W - 100, py + 2, currentTier > 0 ? C.green : C.dimText, 7);
+      drawButton(W - 45, py + 1, 38, 14, 'BROWSE',
+        gameState.mouseX >= W - 45 && gameState.mouseY >= py + 1);
+
+      py += 18;
+    }
+  } else if (gameState.partsScreen === 'install') {
+    const cat = PARTS_CATEGORIES[gameState.selectedPartCat];
+    if (!cat) return;
+
+    drawRect(5, 24, W - 10, 16, C.panel);
+    drawBorder(5, 24, W - 10, 16, C.border);
+    drawTextCentered(`PARTS: ${cat.name.toUpperCase()}`, W / 2, 27, C.yellow, 9);
+
+    const currentTier = car.parts[cat.id] || 0;
+    let py = 48;
+
+    for (let t = 1; t < PART_TIERS.length; t++) {
+      const tier = PART_TIERS[t];
+      const cost = tier.cost;
+      const canAfford = gameState.cash >= cost;
+      const isCurrent = t === currentTier;
+      const hover = gameState.mouseX >= 8 && gameState.mouseX <= W - 8 &&
+                    gameState.mouseY >= py && gameState.mouseY <= py + 20;
+
+      drawRect(8, py, W - 16, 20, isCurrent ? C.blue : (hover ? C.panel : C.darkBg));
+      drawBorder(8, py, W - 16, 20, isCurrent ? C.white : (hover ? C.lightBorder : C.border));
+
+      drawText(tier.name, 14, py + 2, isCurrent ? C.white : (canAfford ? C.text : C.dimText), 8);
+      drawText(`HP:${tier.hpMod > 0 ? '+' : ''}${tier.hpMod} GRP:${tier.gripMod > 0 ? '+' : ''}${tier.gripMod}`, 14, py + 12, C.dimText, 6);
+      drawText(`WT:${tier.weightMod > 0 ? '+' : ''}${tier.weightMod} REL:${tier.relMod > 0 ? '+' : ''}${tier.relMod}`, 14, py + 18, C.dimText, 6);
+      drawText(`$${cost}`, W - 50, py + 4, canAfford ? C.green : C.red, 8);
+
+      if (!isCurrent) {
+        drawButton(W - 45, py + 2, 38, 16, 'BUY',
+          gameState.mouseX >= W - 45 && gameState.mouseY >= py + 2);
+      } else {
+        drawText('INSTALLED', W - 60, py + 4, C.green, 7);
+      }
+
+      py += 22;
+    }
+
+    // Remove part option
+    if (currentTier > 0) {
+      drawButton(8, py + 4, 60, 14, 'REMOVE',
+        gameState.mouseX >= 8 && gameState.mouseY >= py + 4);
+      drawText(`Trade: $${Math.floor(PART_TIERS[currentTier].cost * 0.4)}`, 72, py + 6, C.yellow, 7);
+    }
+
+    drawButton(5, H - 24, 50, 18, 'BACK',
+      gameState.mouseX >= 5 && gameState.mouseY >= H - 24);
+  }
+}
+
+function drawRacingScreen() {
+  if (gameState.cars.length === 0) return;
+
+  drawRect(0, 20, W, H - 20, C.bg);
+  const car = gameState.cars[gameState.currentCarIdx];
+  const stats = getEffectiveStats(car);
+
+  if (gameState.raceState === 'select') {
+    drawRect(5, 24, W - 10, 16, C.panel);
+    drawBorder(5, 24, W - 10, 16, C.border);
+    drawTextCentered('RACE SELECTION', W / 2, 27, C.yellow, 9);
+
+    drawText(`Your Car: ${car.name}`, 10, 46, C.cyan, 8);
+    drawText(`Performance: ${getPerformanceRating(car)}`, 10, 56, C.text, 7);
+    drawText(`Reliability: ${stats.reliability}%`, 10, 66, C.text, 7);
+
+    let ry = 82;
+    for (let i = 0; i < RACES.length; i++) {
+      const race = RACES[i];
+      const unlocked = gameState.reputation >= race.minRep;
+      const hover = gameState.mouseX >= 8 && gameState.mouseX <= W - 8 &&
+                    gameState.mouseY >= ry && gameState.mouseY <= ry + 20;
+
+      drawRect(8, ry, W - 16, 20, unlocked ? (hover ? C.panel : C.darkBg) : '#111');
+      drawBorder(8, ry, W - 16, 20, unlocked ? (hover ? C.lightBorder : C.border) : '#333');
+
+      drawText(race.name, 14, ry + 2, unlocked ? C.text : C.dimText, 8);
+      drawText(`Dist: ${(race.distance / 1609).toFixed(2)} mi`, 14, ry + 12, unlocked ? C.dimText : '#333', 6);
+      drawText(`Prize: $${race.prize}`, W - 80, ry + 2, unlocked ? C.green : '#333', 7);
+      drawText(`Rep: ${race.minRep}+`, W - 80, ry + 12, unlocked ? C.yellow : '#333', 6);
+
+      if (unlocked) {
+        drawButton(W - 45, ry + 2, 38, 16, 'RACE',
+          gameState.mouseX >= W - 45 && gameState.mouseY >= ry + 2);
+      } else {
+        drawText('LOCKED', W - 50, ry + 4, '#333', 7);
+      }
+
+      ry += 22;
+    }
+  } else if (gameState.raceState === 'countdown') {
+    drawRect(0, 20, W, H - 20, '#111');
+
+    const race = RACES[gameState.selectedRace];
+    drawTextCentered(race.name, W / 2, 30, C.yellow, 10);
+
+    // Track
+    drawRect(20, 80, W - 40, 30, '#333');
+    drawRect(20, 120, W - 40, 30, '#333');
+    drawBorder(20, 80, W - 40, 30, '#555');
+    drawBorder(20, 120, W - 40, 30, '#555');
+
+    // Player car
+    drawPixelCar(40 + gameState.raceProgress.player * (W - 80), 95, car.colorIdx, 0.6);
+    drawText('YOU', 40 + gameState.raceProgress.player * (W - 80) - 10, 75, C.cyan, 6);
+
+    // Opponent car
+    const oppColor = rand(0, CAR_COLORS.length - 1);
+    drawPixelCar(40 + gameState.raceProgress.opponent * (W - 80), 135, oppColor, 0.6);
+    drawText('OPP', 40 + gameState.raceProgress.opponent * (W - 80) - 10, 125, C.red, 6);
+
+    // Countdown
+    const countNum = Math.ceil(gameState.raceTimer / 60);
+    if (countNum > 0) {
+      drawTextCentered(countNum.toString(), W / 2, 170, C.yellow, 24);
+    } else {
+      drawTextCentered('GO!', W / 2, 170, C.green, 24);
+    }
+
+    // Finish line
+    drawRect(W - 50, 78, 4, 34, C.white);
+    drawRect(W - 50, 118, 4, 34, C.white);
+    for (let r = 0; r < 17; r++) {
+      drawRect(W - 50, 78 + r * 2, 4, 1, r % 2 === 0 ? C.white : '#333');
+      drawRect(W - 50, 118 + r * 2, 4, 1, r % 2 === 0 ? C.white : '#333');
+    }
+
+  } else if (gameState.raceState === 'racing') {
+    drawRect(0, 20, W, H - 20, '#111');
+
+    const race = RACES[gameState.selectedRace];
+    drawTextCentered(race.name, W / 2, 30, C.yellow, 10);
+
+    // Track
+    drawRect(20, 80, W - 40, 30, '#333');
+    drawRect(20, 120, W - 40, 30, '#333');
+    drawBorder(20, 80, W - 40, 30, '#555');
+    drawBorder(20, 120, W - 40, 30, '#555');
+
+    // Player car
+    drawPixelCar(40 + gameState.raceProgress.player * (W - 80), 95, car.colorIdx, 0.6);
+    drawText('YOU', 40 + gameState.raceProgress.player * (W - 80) - 10, 75, C.cyan, 6);
+
+    // Opponent car
+    const oppColor = rand(0, CAR_COLORS.length - 1);
+    drawPixelCar(40 + gameState.raceProgress.opponent * (W - 80), 135, oppColor, 0.6);
+    drawText('OPP', 40 + gameState.raceProgress.opponent * (W - 80) - 10, 125, C.red, 6);
+
+    // Progress bars
+    drawBar(20, 170, W - 40, 8, gameState.raceProgress.player * 100, 100, C.cyan);
+    drawBar(20, 182, W - 40, 8, gameState.raceProgress.opponent * 100, 100, C.red);
+
+    // Finish line
+    drawRect(W - 50, 78, 4, 34, C.white);
+    drawRect(W - 50, 118, 4, 34, C.white);
+    for (let r = 0; r < 17; r++) {
+      drawRect(W - 50, 78 + r * 2, 4, 1, r % 2 === 0 ? C.white : '#333');
+      drawRect(W - 50, 118 + r * 2, 4, 1, r % 2 === 0 ? C.white : '#333');
+    }
+
+    // Speed display
+    drawText(`SPD: ${Math.floor(stats.hp * 0.8 + rand(-10, 10))} mph`, 20, 198, C.text, 7);
+
+  } else if (gameState.raceState === 'result') {
+    drawRect(0, 20, W, H - 20, C.darkBg);
+    drawBorder(40, 50, W - 80, H - 120, C.border);
+
+    const race = RACES[gameState.selectedRace];
+    const won = gameState.raceResult === 'win';
+
+    drawTextCentered(won ? 'YOU WIN!' : 'YOU LOSE', W / 2, 60, won ? C.green : C.red, 14);
+    drawTextCentered(race.name, W / 2, 80, C.yellow, 9);
+
+    if (won) {
+      drawTextCentered(`+$${race.prize}`, W / 2, 100, C.green, 10);
+      drawTextCentered(`+${race.difficulty} REP`, W / 2, 115, C.yellow, 8);
+    } else {
+      drawTextCentered(`+$${Math.floor(race.prize * 0.1)}`, W / 2, 100, C.orange, 8);
+      drawTextCentered('+1 REP', W / 2, 115, C.dimText, 8);
+    }
+
+    if (gameState.raceResult === 'breakdown') {
+      drawTextCentered('CAR BROKE DOWN!', W / 2, 130, C.red, 8);
+    }
+
+    drawButton(100, 160, 120, 18, 'CONTINUE',
+      gameState.mouseX >= 100 && gameState.mouseY >= 160);
+  }
+}
+
+function drawSaveLoadScreen() {
+  drawRect(0, 20, W, H - 20, C.bg);
+
+  drawRect(5, 24, W - 10, 16, C.panel);
+  drawBorder(5, 24, W - 10, 16, C.border);
+  drawTextCentered('SAVE / LOAD', W / 2, 27, C.yellow, 9);
+
+  drawText('Current Game:', 20, 50, C.text, 8);
+  drawText(`Cash: $${gameState.cash}`, 20, 64, C.green, 8);
+  drawText(`Reputation: ${gameState.reputation}`, 20, 76, C.yellow, 8);
+  drawText(`Day: ${gameState.day}`, 20, 88, C.text, 8);
+  drawText(`Cars Owned: ${gameState.cars.length}`, 20, 100, C.text, 8);
+
+  if (gameState.cars.length > 0) {
+    drawText(`Current: ${gameState.cars[gameState.currentCarIdx].name}`, 20, 114, C.cyan, 8);
+  }
+
+  drawButton(20, 136, 80, 18, 'SAVE',
+    gameState.mouseX >= 20 && gameState.mouseY >= 136);
+  drawButton(120, 136, 80, 18, 'LOAD',
+    gameState.mouseX >= 120 && gameState.mouseY >= 136);
+
+  drawButton(5, H - 24, 50, 18, 'BACK',
+    gameState.mouseX >= 5 && gameState.mouseY >= H - 24);
+
+  if (gameState.messageTimer > 0) {
+    drawTextCentered(gameState.message, W / 2, 170, C.green, 8);
+  }
+}
+
+// ============================================================
+// INPUT HANDLING
+// ============================================================
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = W / rect.width;
+  const scaleY = H / rect.height;
+  gameState.mouseX = (e.clientX - rect.left) * scaleX;
+  gameState.mouseY = (e.clientY - rect.top) * scaleY;
+});
+
+canvas.addEventListener('mousedown', (e) => {
+  initAudio();
+  gameState.mouseDown = true;
+  handleClick(gameState.mouseX, gameState.mouseY);
+});
+
+canvas.addEventListener('mouseup', () => {
+  gameState.mouseDown = false;
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'm' || e.key === 'M') {
+    muted = !muted;
+  }
+});
+
+function handleClick(mx, my) {
+  sfxClick();
+
+  if (gameState.screen === 'title') {
+    const btnW = 120, bx = (W - btnW) / 2;
+    if (mx >= bx && mx <= bx + btnW && my >= 150 && my <= 168) {
+      // New Game
+      sfxSelect();
+      startNewGame();
+    } else if (mx >= bx && mx <= bx + btnW && my >= 172 && my <= 190) {
+      // Load Game
+      sfxSelect();
+      loadGame(true);
+    } else if (mx >= bx && mx <= bx + btnW && my >= 194 && my <= 212) {
+      // Controls - just show message
+      gameState.message = 'Mouse: Click UI | M: Mute';
+      gameState.messageTimer = 120;
+    }
+    return;
+  }
+
+  // Navigation clicks (top bar)
+  if (my >= 2 && my <= 18) {
+    const navBtns = [
+      { label: 'ADS', screen: 'classifieds' },
+      { label: 'GARAGE', screen: 'garage', req: gameState.cars.length > 0 },
+      { label: 'PARTS', screen: 'parts', req: gameState.cars.length > 0 },
+      { label: 'RACES', screen: 'racing', req: gameState.cars.length > 0 },
+      { label: 'SAVE', screen: 'saveLoad' },
+    ];
+    let nx = 180;
+    for (const btn of navBtns) {
+      const bw = btn.label.length * 6 + 10;
+      if (mx >= nx && mx <= nx + bw) {
+        if (btn.req !== false) {
+          sfxSelect();
+          gameState.screen = btn.screen;
+          if (btn.screen === 'classifieds') {
+            gameState.classifieds = generateClassifieds();
+          }
+        } else {
+          sfxError();
+        }
+        return;
+      }
+      nx += bw + 4;
+    }
+  }
+
+  // Classifieds clicks
+  if (gameState.screen === 'classifieds') {
+    const startY = 46;
+    const listingH = 38;
+
+    // Refresh button
+    if (mx >= 5 && mx <= 65 && my >= H - 24 && my <= H - 6) {
+      sfxSelect();
+      gameState.classifieds = generateClassifieds();
+      gameState.selectedListing = -1;
+      return;
+    }
+
+    // Listing selection / inspect / buy
+    for (let i = 0; i < gameState.classifieds.length; i++) {
+      const ly = startY + i * (listingH + 4);
+      if (ly > H - 30) break;
+
+      if (mx >= 8 && mx <= W - 8 && my >= ly && my <= ly + listingH) {
+        if (gameState.selectedListing === i) {
+          // Check INSPECT / BUY buttons
+          if (mx >= W - 80 && mx <= W - 45 && my >= ly + 16 && my <= ly + 30) {
+            // Inspect - just select it (already selected, shows overlay)
+            sfxSelect();
+          } else if (mx >= W - 42 && mx <= W - 7 && my >= ly + 16 && my <= ly + 30) {
+            // Buy at asking price
+            sfxSelect();
+            buyCar(i, gameState.classifieds[i].askingPrice);
+          }
+        } else {
+          // Select listing
+          gameState.selectedListing = i;
+          const listing = gameState.classifieds[i];
+          gameState.negotiationOffer = Math.floor(listing.askingPrice * 0.8);
+          sfxSelect();
+        }
+        return;
+      }
+    }
+
+    // Negotiation overlay clicks
+    if (gameState.selectedListing >= 0) {
+      const listing = gameState.classifieds[gameState.selectedListing];
+
+      // LOWER offer
+      if (mx >= 70 && mx <= 120 && my >= 190 && my <= 204) {
+        gameState.negotiationOffer = Math.max(100, gameState.negotiationOffer - 50);
+        sfxClick();
+      }
+      // RAISE offer
+      else if (mx >= 125 && mx <= 175 && my >= 190 && my <= 204) {
+        gameState.negotiationOffer = Math.min(listing.askingPrice + 500, gameState.negotiationOffer + 50);
+        sfxClick();
+      }
+      // OFFER button
+      else if (mx >= 180 && mx <= 230 && my >= 190 && my <= 204) {
+        sfxSelect();
+        attemptNegotiation(listing);
+      }
+      // CLOSE button
+      else if (mx >= 235 && mx <= 275 && my >= 190 && my <= 204) {
+        gameState.selectedListing = -1;
+        sfxClick();
+      }
+    }
+  }
+
+  // Garage clicks
+  if (gameState.screen === 'garage' && gameState.cars.length > 0) {
+    const car = gameState.cars[gameState.currentCarIdx];
+
+    // Tab buttons
+    const tabY = 24;
+    const tabs = ['overview', 'tune', 'repair'];
+    for (let i = 0; i < tabs.length; i++) {
+      const tx = 5 + i * 70;
+      if (mx >= tx && mx <= tx + 68 && my >= tabY && my <= tabY + 14) {
+        gameState.garageTab = tabs[i];
+        sfxSelect();
+        return;
+      }
+    }
+
+    if (gameState.garageTab === 'overview') {
+      // Sell car button
+      if (mx >= W - 60 && mx <= W - 5 && my >= H - 78 && my <= H - 64) {
+        sfxSelect();
+        sellCar();
+      }
+
+      // Multi-car selector
+      if (gameState.cars.length > 1) {
+        for (let i = 0; i < gameState.cars.length; i++) {
+          const sx = 5 + i * 60;
+          if (mx >= sx && mx <= sx + 56 && my >= H - 72 && my <= H - 58) {
+            gameState.currentCarIdx = i;
+            sfxSelect();
+            return;
+          }
+        }
+      }
+    } else if (gameState.garageTab === 'tune') {
+      const tuneOptions = [
+        { action: 'engine', cost: 150 },
+        { action: 'suspension', cost: 120 },
+        { action: 'brake', cost: 100 },
+        { action: 'detune', cost: 0 },
+      ];
+      let ty = 62;
+      for (const opt of tuneOptions) {
+        if (mx >= W - 45 && mx <= W - 7 && my >= ty + 2 && my <= ty + 14) {
+          if (gameState.cash >= opt.cost) {
+            sfxWrench();
+            gameState.cash -= opt.cost;
+            if (opt.action === 'engine') car.tuneLevel++;
+            else if (opt.action === 'suspension') car.suspensionTune++;
+            else if (opt.action === 'brake') car.brakeTune++;
+            else if (opt.action === 'detune') {
+              car.tuneLevel = 0;
+              car.suspensionTune = 0;
+              car.brakeTune = 0;
+            }
+            sfxCash();
+          } else {
+            sfxError();
+          }
+        }
+        ty += 20;
+      }
+    } else if (gameState.garageTab === 'repair') {
+      const repairOptions = [
+        { cost: 80, condMod: 10 },
+        { cost: 200, condMod: 25 },
+        { cost: 500, condMod: 50 },
+      ];
+      let ry = 62;
+      for (const opt of repairOptions) {
+        if (mx >= W - 45 && mx <= W - 7 && my >= ry + 2 && my <= ry + 14) {
+          if (gameState.cash >= opt.cost && car.condition < 100) {
+            sfxWrench();
+            gameState.cash -= opt.cost;
+            car.condition = Math.min(100, car.condition + opt.condMod);
+            sfxCash();
+          } else if (car.condition >= 100) {
+            gameState.message = 'Already at max condition!';
+            gameState.messageTimer = 60;
+          } else {
+            sfxError();
+          }
+        }
+        ry += 20;
+      }
+    }
+  }
+
+  // Parts shop clicks
+  if (gameState.screen === 'parts' && gameState.cars.length > 0) {
+    const car = gameState.cars[gameState.currentCarIdx];
+
+    if (gameState.partsScreen === 'list') {
+      let py = 46;
+      for (let i = 0; i < PARTS_CATEGORIES.length; i++) {
+        if (mx >= W - 45 && mx <= W - 7 && my >= py + 1 && my <= py + 15) {
+          gameState.selectedPartCat = i;
+          gameState.partsScreen = 'install';
+          sfxSelect();
+        }
+        py += 18;
+      }
+    } else if (gameState.partsScreen === 'install') {
+      const cat = PARTS_CATEGORIES[gameState.selectedPartCat];
+      if (!cat) return;
+
+      const currentTier = car.parts[cat.id] || 0;
+      let py = 48;
+
+      for (let t = 1; t < PART_TIERS.length; t++) {
+        if (mx >= W - 45 && mx <= W - 7 && my >= py + 2 && my <= py + 18) {
+          if (t !== currentTier && gameState.cash >= PART_TIERS[t].cost) {
+            sfxWrench();
+            // Trade in old part if exists
+            if (currentTier > 0) {
+              gameState.cash += Math.floor(PART_TIERS[currentTier].cost * 0.4);
+            }
+            gameState.cash -= PART_TIERS[t].cost;
+            car.parts[cat.id] = t;
+            sfxCash();
+          } else if (t === currentTier) {
+            // Already installed
+          } else {
+            sfxError();
+          }
+        }
+        py += 22;
+      }
+
+      // Remove part
+      if (currentTier > 0 && mx >= 8 && mx <= 68 && my >= py + 4 && my <= py + 18) {
+        sfxWrench();
+        gameState.cash += Math.floor(PART_TIERS[currentTier].cost * 0.4);
+        delete car.parts[cat.id];
+        sfxCash();
+      }
+
+      // Back button
+      if (mx >= 5 && mx <= 55 && my >= H - 24 && my <= H - 6) {
+        gameState.partsScreen = 'list';
+        sfxClick();
+      }
+    }
+  }
+
+  // Racing clicks
+  if (gameState.screen === 'racing' && gameState.cars.length > 0) {
+    if (gameState.raceState === 'select') {
+      let ry = 82;
+      for (let i = 0; i < RACES.length; i++) {
+        const race = RACES[i];
+        if (gameState.reputation >= race.minRep) {
+          if (mx >= W - 45 && mx <= W - 7 && my >= ry + 2 && my <= ry + 18) {
+            sfxSelect();
+            startRace(i);
+          }
+        }
+        ry += 22;
+      }
+    } else if (gameState.raceState === 'result') {
+      if (mx >= 100 && mx <= 220 && my >= 160 && my <= 178) {
+        sfxSelect();
+        gameState.raceState = 'select';
+      }
+    }
+  }
+
+  // Save/Load clicks
+  if (gameState.screen === 'saveLoad') {
+    if (mx >= 20 && mx <= 100 && my >= 136 && my <= 154) {
+      sfxSelect();
+      saveGame();
+    } else if (mx >= 120 && mx <= 200 && my >= 136 && my <= 154) {
+      sfxSelect();
+      loadGame(false);
+    } else if (mx >= 5 && mx <= 55 && my >= H - 24 && my <= H - 6) {
+      sfxClick();
+      gameState.screen = 'classifieds';
+    }
+  }
+}
+
+// ============================================================
+// GAME LOGIC
+// ============================================================
+function startNewGame() {
+  gameState = {
+    screen: 'classifieds',
+    cash: 3500,
+    reputation: 0,
+    day: 1,
+    cars: [],
+    currentCarIdx: 0,
+    classifieds: generateClassifieds(),
+    selectedListing: -1,
+    negotiationOffer: 0,
+    sellerFirmness: 5,
+    partsScreen: 'list',
+    selectedPartCat: -1,
+    raceState: 'select',
+    selectedRace: -1,
+    raceProgress: { player: 0, opponent: 0 },
+    raceTimer: 0,
+    raceResult: '',
+    raceOpponentHP: 0,
+    garageTab: 'overview',
+    mouseX: 0, mouseY: 0,
+    mouseDown: false,
+    hoverBtn: -1,
+    animFrame: 0,
+    message: '',
+    messageTimer: 0,
+  };
+}
+
+function buyCar(listingIdx, price) {
+  const listing = gameState.classifieds[listingIdx];
+  if (gameState.cash >= price) {
+    sfxCash();
+    gameState.cash -= price;
+    const newCar = createCarFromListing(listing);
+    gameState.cars.push(newCar);
+    gameState.currentCarIdx = gameState.cars.length - 1;
+    gameState.selectedListing = -1;
+    gameState.message = `Bought ${newCar.name}!`;
+    gameState.messageTimer = 90;
+    sfxWin();
+  } else {
+    gameState.message = 'Not enough cash!';
+    gameState.messageTimer = 60;
+    sfxError();
+  }
+}
+
+function attemptNegotiation(listing) {
+  const offer = gameState.negotiationOffer;
+  if (offer > gameState.cash) {
+    gameState.message = 'Can\'t afford that!';
+    gameState.messageTimer = 60;
+    sfxError();
+    return;
+  }
+
+  // Negotiation logic based on firmness and offer ratio
+  const ratio = offer / listing.askingPrice;
+  let acceptChance = 0;
+
+  if (ratio >= 1.0) acceptChance = 100;
+  else if (ratio >= 0.9) acceptChance = 80 - listing.firmness * 5;
+  else if (ratio >= 0.8) acceptChance = 50 - listing.firmness * 4;
+  else if (ratio >= 0.7) acceptChance = 25 - listing.firmness * 3;
+  else if (ratio >= 0.6) acceptChance = 10 - listing.firmness * 2;
+  else acceptChance = Math.max(0, 5 - listing.firmness);
+
+  // Desperate sellers more likely to accept
+  if (listing.sellerTrait === 'desperate') acceptChance += 20;
+  if (listing.sellerTrait === 'firm') acceptChance -= 15;
+
+  // Low condition cars easier to negotiate
+  if (listing.condition < 50) acceptChance += 10;
+
+  if (rand(1, 100) <= acceptChance) {
+    buyCar(gameState.selectedListing, offer);
+    gameState.message = `${listing.sellerName} accepted $${offer}!`;
+  } else {
+    gameState.message = `${listing.sellerName} refused $${offer}.`;
+    gameState.messageTimer = 60;
+    sfxError();
+  }
+}
+
+function sellCar() {
+  const car = gameState.cars[gameState.currentCarIdx];
+  if (!car) return;
+
+  const sellPrice = Math.floor(car.value * car.condition / 100);
+  gameState.cash += sellPrice;
+  sfxCash();
+
+  // Remove car and adjust index
+  gameState.cars.splice(gameState.currentCarIdx, 1);
+  if (gameState.currentCarIdx >= gameState.cars.length) {
+    gameState.currentCarIdx = Math.max(0, gameState.cars.length - 1);
+  }
+
+  gameState.message = `Sold for $${sellPrice}!`;
+  gameState.messageTimer = 90;
+
+  if (gameState.cars.length === 0) {
+    gameState.screen = 'classifieds';
+    gameState.classifieds = generateClassifieds();
+  }
+}
+
+function startRace(raceIdx) {
+  const race = RACES[raceIdx];
+  const car = gameState.cars[gameState.currentCarIdx];
+  const stats = getEffectiveStats(car);
+
+  gameState.selectedRace = raceIdx;
+  gameState.raceState = 'countdown';
+  gameState.raceProgress = { player: 0, opponent: 0 };
+  gameState.raceTimer = 180; // 3 seconds countdown at 60fps
+  gameState.raceResult = '';
+
+  // Generate opponent HP based on race difficulty and player stats
+  gameState.raceOpponentHP = Math.floor(stats.hp * (0.8 + race.difficulty * 0.15) + rand(-20, 20));
+
+  sfxEngine();
+}
+
+function updateRace() {
+  if (gameState.raceState === 'countdown') {
+    gameState.raceTimer--;
+    if (gameState.raceTimer === 120 || gameState.raceTimer === 60) {
+      sfxRaceBeep(false);
+    } else if (gameState.raceTimer === 0) {
+      sfxRaceBeep(true);
+      gameState.raceState = 'racing';
+    }
+  } else if (gameState.raceState === 'racing') {
+    const car = gameState.cars[gameState.currentCarIdx];
+    const stats = getEffectiveStats(car);
+
+    // Check for breakdown
+    if (rand(1, 100) > stats.reliability + 80) {
+      gameState.raceResult = 'breakdown';
+      gameState.raceState = 'result';
+      sfxError();
+      return;
+    }
+
+    // Player speed based on HP/weight ratio and grip
+    const playerSpeed = (stats.hp / stats.weight * 0.5 + stats.grip * 0.01) * (0.9 + Math.random() * 0.2);
+    const oppSpeed = (gameState.raceOpponentHP / (stats.weight * 1.05) * 0.5 + stats.grip * 0.008) * (0.9 + Math.random() * 0.2);
+
+    gameState.raceProgress.player = Math.min(1, gameState.raceProgress.player + playerSpeed * 0.003);
+    gameState.raceProgress.opponent = Math.min(1, gameState.raceProgress.opponent + oppSpeed * 0.003);
+
+    // Check finish
+    if (gameState.raceProgress.player >= 1 || gameState.raceProgress.opponent >= 1) {
+      const won = gameState.raceProgress.player >= 1 &&
+                  (gameState.raceProgress.player > gameState.raceProgress.opponent ||
+                   gameState.raceProgress.opponent < 1);
+
+      const race = RACES[gameState.selectedRace];
+      if (won) {
+        gameState.raceResult = 'win';
+        gameState.cash += race.prize;
+        gameState.reputation += race.difficulty;
+        sfxWin();
+      } else {
+        gameState.raceResult = 'lose';
+        gameState.cash += Math.floor(race.prize * 0.1);
+        gameState.reputation += 1;
+        sfxLose();
+      }
+
+      // Car wear from racing
+      car.condition = Math.max(5, car.condition - rand(2, 8));
+
+      gameState.raceState = 'result';
+    }
+  }
+}
+
+function saveGame() {
+  try {
+    const data = JSON.stringify({
+      cash: gameState.cash,
+      reputation: gameState.reputation,
+      day: gameState.day,
+      cars: gameState.cars,
+      currentCarIdx: gameState.currentCarIdx,
+    });
+    localStorage.setItem('streetgarage_save', data);
+    gameState.message = 'Game saved!';
+    gameState.messageTimer = 60;
+    sfxCash();
+  } catch (e) {
+    gameState.message = 'Save failed!';
+    gameState.messageTimer = 60;
+  }
+}
+
+function loadGame(fromTitle) {
+  try {
+    const data = localStorage.getItem('streetgarage_save');
+    if (!data) {
+      gameState.message = 'No save found!';
+      gameState.messageTimer = 60;
+      sfxError();
+      return false;
+    }
+
+    const saved = JSON.parse(data);
+    gameState.cash = saved.cash;
+    gameState.reputation = saved.reputation;
+    gameState.day = saved.day || 1;
+    gameState.cars = saved.cars || [];
+    gameState.currentCarIdx = saved.currentCarIdx || 0;
+
+    if (fromTitle) {
+      gameState.screen = 'classifieds';
+      gameState.classifieds = generateClassifieds();
+    } else {
+      gameState.screen = 'saveLoad';
+    }
+
+    gameState.message = 'Game loaded!';
+    gameState.messageTimer = 60;
+    sfxCash();
+    return true;
+  } catch (e) {
+    gameState.message = 'Load failed!';
+    gameState.messageTimer = 60;
+    sfxError();
+    return false;
+  }
+}
+
+// ============================================================
+// MAIN GAME LOOP
+// ============================================================
+function gameLoop() {
+  gameState.animFrame++;
+
+  // Clear
+  drawRect(0, 0, W, H, C.bg);
+
+  // Update race if active
+  if (gameState.screen === 'racing') {
+    updateRace();
+  }
+
+  // Draw current screen
+  switch (gameState.screen) {
+    case 'title': drawTitleScreen(); break;
+    case 'classifieds':
+      drawNavMenu();
+      drawClassifiedsScreen();
+      break;
+    case 'garage':
+      drawNavMenu();
+      drawGarageScreen();
+      break;
+    case 'parts':
+      drawNavMenu();
+      drawPartsScreen();
+      break;
+    case 'racing':
+      drawNavMenu();
+      drawRacingScreen();
+      break;
+    case 'saveLoad':
+      drawNavMenu();
+      drawSaveLoadScreen();
+      break;
+  }
+
+  // Message display
+  if (gameState.messageTimer > 0) {
+    gameState.messageTimer--;
+    const alpha = Math.min(1, gameState.messageTimer / 20);
+    ctx.globalAlpha = alpha;
+    drawTextCentered(gameState.message, W / 2, H - 18, C.yellow, 8);
+    ctx.globalAlpha = 1;
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+// Start the game loop
+gameLoop();
+</script>
+</body>
+</html>
+

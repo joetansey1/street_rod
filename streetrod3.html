@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>STREET GARAGE '89</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: monospace; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; background: #0a0a12; }
+  #crt { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.15) 0px, rgba(0,0,0,0.15) 1px, transparent 1px, transparent 3px);
+    box-shadow: inset 0 0 80px rgba(0,0,0,0.6);
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="crt"></div>
+<script>
+// ============================================================
+// STREET GARAGE '89 - JUICE PASS
+// Retro DOS/EGA management sim with enhanced visuals & feedback
+// ============================================================
+
+const W = 320, H = 200;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = W; canvas.height = H;
+
+// Scale to fit window while keeping aspect ratio
+function resize() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H) * 0.95;
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// CONSTANTS & DATA TABLES
+// ============================================================
+const C = {
+  bg: '#0a0a12', panelBg: '#14141e', border: '#3a3a5c', accent: '#00ffcc',
+  text: '#d0d0e8', dimText: '#6a6a8c', green: '#33ff77', red: '#ff4455',
+  yellow: '#ffcc33', orange: '#ff8833', blue: '#4488ff', purple: '#aa55ff',
+  white: '#ffffff', black: '#000000'
+};
+
+const CAR_COLORS = ['#cc3333','#3366cc','#22aa44','#ddaa00','#8855aa','#ffffff','#333333'];
+const CAR_NAMES = ['Vulture Falcon','Bravado 440','Kodiak GT','Sparrow Coupe','Ironhorse Fastback','Cobra V8','Thunderbird X'];
+const PART_NAMES = ['Carburetor','Intake Manifold','Exhaust System','Camshaft','Performance Tires','Close-Ratio Trans','Limited-Slip Diff','Weight Reduction','Radiator Upgrade','Disc Brakes'];
+const PART_STATS = [
+  {hp:15,wt:0,grip:0,rel:-2},{hp:8,wt:0,grip:0,rel:1},{hp:12,wt:-5,grip:0,rel:-1},
+  {hp:18,wt:2,grip:0,rel:-3},{hp:0,wt:0,grip:15,rel:2},{hp:5,wt:3,grip:0,rel:-1},
+  {hp:0,wt:2,grip:10,rel:1},{hp:0,wt:-15,grip:-2,rel:0},{hp:3,wt:4,grip:0,rel:5},
+  {hp:-2,wt:3,grip:8,rel:4}
+];
+
+const RACES = [
+  {name:'Back Alley Burnout', difficulty:1, purse:200, minRep:0},
+  {name:'Downtown Drag Strip', difficulty:2, purse:450, minRep:3},
+  {name:'Harbor Night Run', difficulty:3, purse:800, minRep:7},
+  {name:'Industrial Park Sprint', difficulty:4, purse:1200, minRep:12},
+  {name:'Highway 9 Challenge', difficulty:5, purse:1800, minRep:18},
+  {name:'Midnight Grand Prix', difficulty:6, purse:2500, minRep:25}
+];
+
+// ============================================================
+// AUDIO MANAGER (Enhanced Web Audio)
+// ============================================================
+class AudioManager {
+  constructor() {
+    this.ctx = null;
+    this.muted = false;
+    this.initialized = false;
+  }
+
+  init() {
+    if (this.initialized) return;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.initialized = true;
+  }
+
+  play(type, vol=0.3) {
+    if (this.muted || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    switch(type) {
+      case 'click':
+        osc.type = 'square'; osc.frequency.setValueAtTime(800, t);
+        gain.gain.setValueAtTime(vol*0.5, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t+0.05);
+        osc.start(t); osc.stop(t+0.06); break;
+      case 'select':
+        osc.type = 'triangle'; osc.frequency.setValueAtTime(600, t);
+        osc.frequency.exponentialRampToValueAtTime(900, t+0.1);
+        gain.gain.setValueAtTime(vol*0.4, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t+0.12);
+        osc.start(t); osc.stop(t+0.13); break;
+      case 'buy':
+        osc.type = 'square'; osc.frequency.setValueAtTime(523, t);
+        gain.gain.setValueAtTime(vol*0.4, t);
+        osc.frequency.setValueAtTime(659, t+0.1);
+        gain.gain.exponentialRampToValueAtTime(0.01, t+0.25);
+        osc.start(t); osc.stop(t+0.26); break;
+      case 'upgrade':
+        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(200, t);
+        osc.frequency.exponentialRampToValueAtTime(800, t+0.15);
+        gain.gain.setValueAtTime(vol*0.3, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t+0.2);
+        osc.start(t); osc.stop(t+0.21); break;
+      case 'countdown':
+        osc.type = 'square'; osc.frequency.setValueAtTime(440, t);
+        gain.gain.setValueAtTime(vol*0.5, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t+0.15);
+        osc.start(t); osc.stop(t+0.16); break;
+      case 'go':
+        osc.type = 'square'; osc.frequency.setValueAtTime(880, t);
+        gain.gain.setValueAtTime(vol*0.6, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t+0.3);
+        osc.start(t); osc.stop(t+0.31); break;
+      case 'win':
+        [523,659,784,1047].forEach((f,i) => {
+          const o = this.ctx.createOscillator(); const g = this.ctx.createGain();
+          o.connect(g); g.connect(this.ctx.destination);
+          o.type = 'square'; o.frequency.value = f;
+          g.gain.setValueAtTime(vol*0.4, t+i*0.12);
+          g.gain.exponentialRampToValueAtTime(0.01, t+i*0.12+0.2);
+          o.start(t+i*0.12); o.stop(t+i*0.12+0.21);
+        }); break;
+      case 'lose':
+        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(400, t);
+        osc.frequency.exponentialRampToValueAtTime(150, t+0.4);
+        gain.gain.setValueAtTime(vol*0.4, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t+0.45);
+        osc.start(t); osc.stop(t+0.46); break;
+      case 'engine':
+        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(60, t);
+        gain.gain.setValueAtTime(vol*0.15, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t+0.5);
+        osc.start(t); osc.stop(t+0.51); break;
+    }
+  }
+
+  toggleMute() { this.muted = !this.muted; return this.muted; }
+}
+
+// ============================================================
+// INPUT HANDLER
+// ============================================================
+class Input {
+  constructor() {
+    this.mouseX = 0; this.mouseY = 0;
+    this.clicked = false; this.hovered = null;
+    canvas.addEventListener('mousemove', e => {
+      const r = canvas.getBoundingClientRect();
+      this.mouseX = (e.clientX - r.left) * (W / r.width);
+      this.mouseY = (e.clientY - r.top) * (H / r.height);
+    });
+    canvas.addEventListener('mousedown', () => { this.clicked = true; audio.init(); });
+    window.addEventListener('keydown', e => {
+      const k = e.key.toLowerCase();
+      if (k === 'c') game.switchScreen('classifieds');
+      else if (k === 'g') game.switchScreen('garage');
+      else if (k === 'p') game.switchScreen('parts');
+      else if (k === 'r') game.switchScreen('races');
+      else if (k === 's') { game.save(); audio.play('select'); }
+      else if (k === 'l') { game.load(); audio.play('select'); }
+      else if (k === 'm') { const m = audio.toggleMute(); game.addMessage(m ? 'AUDIO MUTED' : 'AUDIO ON'); }
+    });
+  }
+}
+
+// ============================================================
+// PARTICLE SYSTEM (Lightweight)
+// ============================================================
+class Particle {
+  constructor(x, y, vx, vy, life, color) {
+    this.x = x; this.y = y; this.vx = vx; this.vy = vy;
+    this.life = life; this.maxLife = life; this.color = color;
+  }
+  update() { this.x += this.vx; this.y += this.vy; this.life--; }
+  draw(ctx) {
+    const a = this.life / this.maxLife;
+    ctx.globalAlpha = a * 0.7;
+    ctx.fillStyle = this.color;
+    ctx.fillRect(this.x, this.y, 2, 2);
+    ctx.globalAlpha = 1;
+  }
+}
+
+class ParticleSystem {
+  constructor() { this.particles = []; }
+  emit(x, y, count, color, spread=2) {
+    for (let i = 0; i < count; i++) {
+      this.particles.push(new Particle(
+        x + Math.random()*4-2, y + Math.random()*4-2,
+        (Math.random()-0.5)*spread, (Math.random()-0.5)*spread,
+        15 + Math.random()*20, color
+      ));
+    }
+  }
+  update() { this.particles = this.particles.filter(p => p.life > 0); this.particles.forEach(p => p.update()); }
+  draw(ctx) { this.particles.forEach(p => p.draw(ctx)); }
+}
+
+// ============================================================
+// RENDERER (Enhanced with Juice)
+// ============================================================
+class Renderer {
+  constructor() { this.flash = 0; }
+
+  clear(color) { ctx.fillStyle = color || C.bg; ctx.fillRect(0, 0, W, H); }
+
+  text(str, x, y, color=C.text, size=8) {
+    ctx.font = `bold ${size}px monospace`;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.strokeText(str, x, y);
+    ctx.fillText(str, x, y);
+  }
+
+  panel(x, y, w, h, bg=C.panelBg, border=C.border) {
+    ctx.fillStyle = bg;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+    // Inner highlight for retro depth
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.fillRect(x+1, y+1, w-2, 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(x+1, y+h-2, w-2, 2);
+  }
+
+  button(x, y, w, h, label, hover=false, active=false) {
+    const bg = active ? C.accent : (hover ? '#2a2a4c' : '#1a1a2e');
+    const fg = active ? C.black : (hover ? C.white : C.text);
+    this.panel(x, y, w, h, bg, hover ? C.accent : C.border);
+    this.text(label, x + 4, y + h/2 + 3, fg);
+    if (active) { this.flash = 5; }
+  }
+
+  progressBar(x, y, w, h, val, max=100, color=C.green) {
+    this.panel(x, y, w, h, '#111', C.border);
+    const fill = Math.max(0, Math.min(w-2, (val/max) * (w-2)));
+    ctx.fillStyle = color;
+    ctx.fillRect(x+1, y+1, fill, h-2);
+    // Segmented retro look
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    for (let i = 1; i < w-2; i += 6) {
+      if (i < fill) ctx.fillRect(x+1+i, y+1, 1, h-2);
+    }
+  }
+
+  drawCar(x, y, colorIdx=0, style='coupe') {
+    const col = CAR_COLORS[colorIdx % CAR_COLORS.length];
+    ctx.fillStyle = '#222'; // tires
+    ctx.fillRect(x+10, y+18, 6, 6);
+    ctx.fillRect(x+32, y+18, 6, 6);
+    // Body
+    ctx.fillStyle = col;
+    if (style === 'muscle') {
+      ctx.fillRect(x, y+8, 42, 10); // main body
+      ctx.fillRect(x+6, y+3, 24, 5); // roof
+      ctx.fillRect(x+1, y+6, 3, 4); // front bumper
+      ctx.fillRect(x+38, y+6, 3, 4); // rear bumper
+    } else {
+      ctx.fillRect(x+2, y+8, 38, 10);
+      ctx.fillRect(x+8, y+4, 20, 4);
+      ctx.fillRect(x, y+7, 3, 5);
+      ctx.fillRect(x+39, y+7, 3, 5);
+    }
+    // Windows
+    ctx.fillStyle = '#88ccff';
+    if (style === 'muscle') {
+      ctx.fillRect(x+10, y+4, 8, 3);
+      ctx.fillRect(x+20, y+4, 8, 3);
+    } else {
+      ctx.fillRect(x+12, y+5, 6, 3);
+      ctx.fillRect(x+20, y+5, 6, 3);
+    }
+    // Headlight/Taillight
+    ctx.fillStyle = '#ffffaa';
+    ctx.fillRect(x+1, y+9, 2, 3);
+    ctx.fillStyle = '#ff4444';
+    ctx.fillRect(x+39, y+9, 2, 3);
+    // Exhaust smoke (subtle)
+    if (Math.random() > 0.7) {
+      ctx.fillStyle = 'rgba(150,150,150,0.3)';
+      ctx.fillRect(x+42, y+16, 2, 2);
+    }
+  }
+
+  drawTooltip(mx, my, text) {
+    const tw = ctx.measureText(text).width + 8;
+    let tx = mx - tw/2, ty = my - 14;
+    if (tx < 0) tx = 2; if (tx + tw > W) tx = W - tw - 2;
+    if (ty < 0) ty = my + 14;
+    this.panel(tx, ty, tw, 12, '#0a0a18', C.accent);
+    this.text(text, tx + 4, ty + 9, C.yellow, 7);
+  }
+
+  drawRaceBackground() {
+    this.clear(C.bg);
+    // Road
+    ctx.fillStyle = '#2a2a35';
+    ctx.fillRect(0, 120, W, 60);
+    // Lane dividers
+    ctx.fillStyle = '#555';
+    for (let i = 0; i < W; i += 20) {
+      ctx.fillRect(i, 148, 10, 2);
+    }
+    // Sidewalks
+    ctx.fillStyle = '#3a3a45';
+    ctx.fillRect(0, 118, W, 2);
+    ctx.fillRect(0, 180, W, 2);
+    // Background buildings (simple)
+    ctx.fillStyle = '#1a1a25';
+    for (let i = 0; i < W; i += 30) {
+      const h = 20 + Math.sin(i*0.1)*10;
+      ctx.fillRect(i, 120-h, 25, h);
+      // Windows
+      ctx.fillStyle = '#ffcc44';
+      if (Math.random() > 0.5) ctx.fillRect(i+5, 120-h+4, 3, 3);
+      if (Math.random() > 0.5) ctx.fillRect(i+12, 120-h+4, 3, 3);
+      ctx.fillStyle = '#1a1a25';
+    }
+  }
+
+  drawGarageBackground() {
+    this.clear(C.bg);
+    // Floor
+    ctx.fillStyle = '#1e1e28';
+    ctx.fillRect(0, 140, W, 60);
+    // Oil stains
+    ctx.fillStyle = 'rgba(20,20,30,0.6)';
+    ctx.fillRect(40, 150, 25, 8);
+    ctx.fillRect(180, 160, 35, 10);
+    ctx.fillRect(260, 145, 20, 6);
+    // Walls
+    ctx.fillStyle = '#2a2a38';
+    ctx.fillRect(0, 0, W, 140);
+    // Shelves
+    ctx.fillStyle = '#3a2a1a';
+    ctx.fillRect(0, 40, W, 3);
+    ctx.fillRect(0, 80, W, 3);
+    // Posters
+    ctx.fillStyle = '#4a2a2a';
+    ctx.fillRect(10, 50, 30, 25);
+    ctx.fillStyle = '#2a4a2a';
+    ctx.fillRect(280, 50, 30, 25);
+    // Tool chest
+    ctx.fillStyle = '#8a4a1a';
+    ctx.fillRect(20, 100, 35, 35);
+    ctx.fillStyle = '#aa6a2a';
+    for (let i = 0; i < 3; i++) ctx.fillRect(22, 104+i*10, 31, 8);
+    // Workbench
+    ctx.fillStyle = '#5a4a3a';
+    ctx.fillRect(260, 100, 50, 35);
+    ctx.fillStyle = '#7a6a5a';
+    ctx.fillRect(262, 102, 46, 3);
+    // Tires stacked
+    ctx.fillStyle = '#1a1a1a';
+    for (let i = 0; i < 3; i++) ctx.fillRect(240, 115+i*8, 12, 8);
+    // Garage door lines
+    ctx.strokeStyle = '#3a3a4c';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath(); ctx.moveTo(0, 140+i*12); ctx.lineTo(W, 140+i*12); ctx.stroke();
+    }
+  }
+
+  drawNewspaperBackground() {
+    this.clear('#e8e4d8');
+    // Paper texture lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.05)';
+    for (let i = 0; i < H; i += 4) {
+      ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(W, i); ctx.stroke();
+    }
+  }
+
+  drawTransition(alpha) {
+    if (alpha <= 0) return;
+    ctx.fillStyle = `rgba(10,10,18,${alpha})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  drawFlash() {
+    if (this.flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${this.flash * 0.1})`;
+      ctx.fillRect(0, 0, W, H);
+      this.flash--;
+    }
+  }
+
+  drawMessages(msgs) {
+    msgs.forEach((m, i) => {
+      const a = Math.min(1, m.life / 30);
+      ctx.globalAlpha = a;
+      this.panel(10, H - 25 - i*14, W-20, 12, '#0a0a18', C.accent);
+      this.text(m.text, 14, H - 17 - i*14, C.yellow, 7);
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  drawParticles(ps) { ps.draw(ctx); }
+}
+
+// ============================================================
+// GAME CLASS (Preserved Mechanics + Juice Systems)
+// ============================================================
+class Game {
+  constructor() {
+    this.screen = 'garage'; // garage, classifieds, parts, races, racing, results
+    this.prevScreen = 'garage';
+    this.transitionAlpha = 0;
+    this.transitioning = false;
+    this.targetScreen = null;
+
+    // Player state
+    this.cash = 3500;
+    this.reputation = 0;
+    this.carsOwned = 1;
+    this.racesWon = 0;
+    this.day = 1;
+
+    // Current car
+    const baseCar = { name:'Sparrow Coupe', year:1974, hp:180, weight:2800, grip:65, reliability:70, value:1200, condition:85 };
+    this.currentCar = { ...baseCar, colorIdx: 3, bodyStyle: 'coupe', parts: {} };
+
+    // Systems
+    this.classifieds = [];
+    this.partsShop = [];
+    this.selectedRace = 0;
+    this.messages = [];
+
+    // Race state
+    this.racePhase = 'idle'; // idle, countdown, racing, finished
+    this.raceTimer = 0;
+    this.playerProgress = 0;
+    this.opponentProgress = 0;
+    this.raceResult = '';
+
+    // Juice systems
+    this.particles = new ParticleSystem();
+    this.renderer = new Renderer();
+    this.input = new Input();
+
+    // Generate initial content
+    this.generateClassifieds();
+    this.generatePartsShop();
+
+    // Bind click handler
+    canvas.addEventListener('click', () => { this.handleClick(); });
+  }
+
+  generateClassifieds() {
+    this.classifieds = [];
+    for (let i = 0; i < 8; i++) {
+      const name = CAR_NAMES[Math.floor(Math.random()*CAR_NAMES.length)];
+      const year = 1965 + Math.floor(Math.random()*12);
+      const cond = 40 + Math.floor(Math.random()*55);
+      this.classifieds.push({
+        id: i, name, year, price: 800 + Math.floor(Math.random()*2500),
+        mileage: 30000 + Math.floor(Math.random()*120000),
+        condition: cond, hp: 140 + Math.floor(Math.random()*120),
+        weight: 2600 + Math.floor(Math.random()*800),
+        grip: 50 + Math.floor(Math.random()*40),
+        reliability: cond, colorIdx: Math.floor(Math.random()*CAR_COLORS.length),
+        bodyStyle: Math.random() > 0.5 ? 'muscle' : 'coupe',
+        hiddenIssue: Math.random() > 0.6 ? ['Rust','Bad Transmission','Overheating'][Math.floor(Math.random()*3)] : null,
+        sellerFirmness: Math.random() > 0.5 ? 'firm' : 'flexible',
+        sellerName: ['Hank','Rusty','Big Mike','Old Tom','Salvador','Dutch'][Math.floor(Math.random()*6)]
+      });
+    }
+  }
+
+  generatePartsShop() {
+    this.partsShop = PART_NAMES.map((name, i) => ({
+      id: i, name, cost: 150 + Math.floor(Math.random()*400),
+      stats: PART_STATS[i], installed: false, level: 0
+    }));
+  }
+
+  addMessage(text) {
+    this.messages.push({ text, life: 120 });
+    if (this.messages.length > 3) this.messages.shift();
+  }
+
+  switchScreen(target) {
+    if (this.transitioning || target === this.screen) return;
+    this.prevScreen = this.screen;
+    this.targetScreen = target;
+    this.transitioning = true;
+    this.transitionAlpha = 0;
+    audio.play('select');
+  }
+
+  handleClick() {
+    if (this.transitioning) return;
+    const mx = this.input.mouseX, my = this.input.mouseY;
+
+    if (this.screen === 'garage') {
+      // Hotspots
+      const spots = [
+        {x:10, y:150, w:60, h:20, action:'classifieds', label:'Classifieds'},
+        {x:80, y:150, w:60, h:20, action:'parts', label:'Parts Shop'},
+        {x:150, y:150, w:60, h:20, action:'races', label:'Race Map'},
+        {x:220, y:150, w:60, h:20, action:'sell', label:'Sell Car'},
+        {x:10, y:175, w:60, h:20, action:'tune', label:'Tune Car'},
+        {x:80, y:175, w:60, h:20, action:'repair', label:'Repair'}
+      ];
+      for (const s of spots) {
+        if (mx >= s.x && mx <= s.x+s.w && my >= s.y && my <= s.y+s.h) {
+          audio.play('click');
+          if (s.action === 'classifieds') this.switchScreen('classifieds');
+          else if (s.action === 'parts') this.switchScreen('parts');
+          else if (s.action === 'races') this.switchScreen('races');
+          else if (s.action === 'sell') {
+            const val = Math.floor(this.currentCar.value * (this.currentCar.condition/100));
+            this.cash += val;
+            this.addMessage(`Sold for $${val}`);
+            audio.play('buy');
+          } else if (s.action === 'tune') {
+            this.currentCar.hp += 5;
+            this.currentCar.reliability -= 3;
+            this.addMessage('Tuned: +5 HP, -3 REL');
+            audio.play('upgrade');
+          } else if (s.action === 'repair') {
+            const cost = Math.floor((100 - this.currentCar.condition) * 8);
+            if (this.cash >= cost && this.currentCar.condition < 100) {
+              this.cash -= cost;
+              this.currentCar.condition = Math.min(100, this.currentCar.condition + 15);
+              this.addMessage(`Repaired: -$${cost}`);
+              audio.play('upgrade');
+            } else {
+              this.addMessage(this.currentCar.condition >= 100 ? 'Already perfect!' : 'Not enough cash!');
+            }
+          }
+          break;
+        }
+      }
+    } else if (this.screen === 'classifieds') {
+      // Back button
+      if (mx >= 5 && mx <= 45 && my >= 182 && my <= 196) { this.switchScreen('garage'); return; }
+      // Car listings
+      for (let i = 0; i < this.classifieds.length; i++) {
+        const c = this.classifieds[i];
+        const y = 25 + i * 18;
+        if (mx >= 5 && mx <= W-5 && my >= y && my <= y+16) {
+          if (this.cash >= c.price * 0.8) {
+            this.currentCar = {...c, parts: {}, condition: c.condition};
+            this.cash -= c.price;
+            this.addMessage(`Bought ${c.name}!`);
+            audio.play('buy');
+            this.generateClassifieds(); // Refresh ads
+          } else {
+            this.addMessage('Not enough cash!');
+          }
+          break;
+        }
+      }
+    } else if (this.screen === 'parts') {
+      // Back button
+      if (mx >= 5 && mx <= 45 && my >= 182 && my <= 196) { this.switchScreen('garage'); return; }
+      // Part buttons
+      for (let i = 0; i < this.partsShop.length; i++) {
+        const p = this.partsShop[i];
+        const col = i % 5, row = Math.floor(i / 5);
+        const bx = 10 + col * 62, by = 30 + row * 28;
+        if (mx >= bx && mx <= bx+58 && my >= by && my <= by+24) {
+          if (this.cash >= p.cost && !p.installed) {
+            this.cash -= p.cost;
+            p.installed = true;
+            p.level++;
+            this.currentCar.hp += p.stats.hp;
+            this.currentCar.weight += p.stats.wt;
+            this.currentCar.grip += p.stats.grip;
+            this.currentCar.reliability = Math.max(10, Math.min(100, this.currentCar.reliability + p.stats.rel));
+            this.addMessage(`Installed ${p.name}`);
+            audio.play('upgrade');
+          } else if (p.installed) {
+            this.addMessage('Already installed!');
+          } else {
+            this.addMessage('Not enough cash!');
+          }
+          break;
+        }
+      }
+    } else if (this.screen === 'races') {
+      // Back button
+      if (mx >= 5 && mx <= 45 && my >= 182 && my <= 196) { this.switchScreen('garage'); return; }
+      // Race buttons
+      for (let i = 0; i < RACES.length; i++) {
+        const r = RACES[i];
+        const y = 25 + i * 18;
+        if (mx >= 5 && mx <= W-5 && my >= y && my <= y+16) {
+          if (this.reputation >= r.minRep) {
+            this.selectedRace = i;
+            this.startRace();
+          } else {
+            this.addMessage(`Need ${r.minRep} REP`);
+          }
+          break;
+        }
+      }
+    } else if (this.screen === 'racing' && this.racePhase === 'finished') {
+      // Return to races after result
+      this.switchScreen('races');
+    } else if (this.screen === 'results') {
+      this.switchScreen('garage');
+    }
+  }
+
+  startRace() {
+    this.switchScreen('racing');
+    this.racePhase = 'countdown';
+    this.raceTimer = 180; // 3 seconds at 60fps
+    this.playerProgress = 0;
+    this.opponentProgress = 0;
+    audio.play('countdown');
+  }
+
+  updateRace() {
+    if (this.racePhase === 'countdown') {
+      this.raceTimer--;
+      if (this.raceTimer === 120 || this.raceTimer === 60) audio.play('countdown');
+      if (this.raceTimer <= 0) {
+        this.racePhase = 'racing';
+        audio.play('go');
+      }
+    } else if (this.racePhase === 'racing') {
+      // Stat-based simulation with slight variance
+      const carPower = this.currentCar.hp / (this.currentCar.weight * 0.01);
+      const oppPower = RACES[this.selectedRace].difficulty * 35 + Math.random() * 10;
+      const playerSpeed = (carPower / oppPower) * 0.008 + Math.random() * 0.002;
+      const oppSpeed = 0.006 + Math.random() * 0.002;
+
+      this.playerProgress += playerSpeed;
+      this.opponentProgress += oppSpeed;
+
+      // Reliability check (breakdown chance)
+      if (Math.random() < 0.001 * (1 - this.currentCar.reliability/100)) {
+        this.racePhase = 'finished';
+        this.raceResult = 'breakdown';
+        audio.play('lose');
+        this.particles.emit(150, 160, 20, C.orange);
+        return;
+      }
+
+      // Exhaust particles
+      if (Math.random() > 0.6) {
+        this.particles.emit(20 + Math.floor(this.playerProgress * (W-60)) + 40, 165, 1, '#888', 1);
+      }
+
+      if (this.playerProgress >= 1) {
+        this.racePhase = 'finished';
+        this.raceResult = 'win';
+        audio.play('win');
+        this.particles.emit(280, 160, 30, C.green);
+      } else if (this.opponentProgress >= 1) {
+        this.racePhase = 'finished';
+        this.raceResult = 'lose';
+        audio.play('lose');
+      }
+    } else if (this.racePhase === 'finished') {
+      // Apply results on next frame after click handled
+    }
+  }
+
+  applyRaceResults() {
+    if (this.raceResult === 'win') {
+      const race = RACES[this.selectedRace];
+      const prize = Math.round(race.purse * (0.8 + Math.random() * 0.4));
+      this.cash += prize;
+      this.reputation += race.difficulty * 2;
+      this.racesWon++;
+      this.addMessage(`Won $${prize}! +REP`);
+    } else if (this.raceResult === 'breakdown') {
+      this.reputation = Math.max(0, this.reputation - 2);
+      this.currentCar.condition -= 15;
+      this.addMessage('Broken down! Car damaged.');
+    } else {
+      const race = RACES[this.selectedRace];
+      this.cash += Math.round(race.purse * 0.1);
+      this.addMessage('Lost. Consolation prize.');
+    }
+  }
+
+  save() {
+    const data = { cash: this.cash, reputation: this.reputation, carsOwned: this.carsOwned, racesWon: this.racesWon, day: this.day, currentCar: {...this.currentCar} };
+    localStorage.setItem('streetGarage89', JSON.stringify(data));
+    this.addMessage('GAME SAVED');
+  }
+
+  load() {
+    const raw = localStorage.getItem('streetGarage89');
+    if (raw) {
+      try {
+        const data = JSON.parse(raw);
+        this.cash = data.cash || 3500;
+        this.reputation = data.reputation || 0;
+        this.carsOwned = data.carsOwned || 1;
+        this.racesWon = data.racesWon || 0;
+        this.day = data.day || 1;
+        if (data.currentCar) Object.assign(this.currentCar, data.currentCar);
+        this.addMessage('GAME LOADED');
+      } catch(e) { this.addMessage('SAVE CORRUPTED'); }
+    } else {
+      this.addMessage('NO SAVE FOUND');
+    }
+  }
+
+  update() {
+    // Transition handling
+    if (this.transitioning) {
+      this.transitionAlpha += 0.05;
+      if (this.transitionAlpha >= 1) {
+        this.screen = this.targetScreen;
+        if (this.screen === 'racing') {
+          // Apply results from previous race if switching back
+        }
+        this.transitioning = false;
+      }
+    } else {
+      // Fade out if transitioning started elsewhere (handled above)
+    }
+
+    // Update messages
+    this.messages = this.messages.filter(m => m.life > 0);
+    this.messages.forEach(m => m.life--);
+
+    // Update particles
+    this.particles.update();
+
+    // Race logic
+    if (this.screen === 'racing') {
+      this.updateRace();
+    }
+
+    // Apply results when returning from racing/results
+    if (this.screen === 'results') {
+      this.applyRaceResults();
+      this.switchScreen('garage');
+    }
+
+    // Reset click flag
+    this.input.clicked = false;
+  }
+
+  render() {
+    // Clear & draw base screen
+    if (this.screen === 'garage') this.renderer.drawGarageBackground();
+    else if (this.screen === 'classifieds') this.renderer.drawNewspaperBackground();
+    else if (this.screen === 'parts' || this.screen === 'races') this.renderer.clear(C.bg);
+    else if (this.screen === 'racing') this.renderer.drawRaceBackground();
+
+    // Draw screen content
+    if (this.screen === 'garage') this.renderGarage();
+    else if (this.screen === 'classifieds') this.renderClassifieds();
+    else if (this.screen === 'parts') this.renderParts();
+    else if (this.screen === 'races') this.renderRaces();
+    else if (this.screen === 'racing') this.renderRacing();
+
+    // Draw particles
+    this.renderer.drawParticles(this.particles);
+
+    // Draw messages
+    this.renderer.drawMessages(this.messages);
+
+    // Draw transition overlay
+    if (this.transitioning) {
+      this.renderer.drawTransition(this.transitionAlpha);
+    }
+
+    // Draw flash effect
+    this.renderer.drawFlash();
+  }
+
+  renderGarage() {
+    // Car display
+    this.renderer.drawCar(120, 90, this.currentCar.colorIdx, this.currentCar.bodyStyle);
+
+    // Stats panel
+    this.renderer.panel(5, 5, W-10, 75, C.panelBg, C.border);
+    this.renderer.text(`CASH: $${this.cash}`, 10, 15, C.green);
+    this.renderer.text(`REP: ${this.reputation}`, 80, 15, C.yellow);
+    this.renderer.text(`DAY: ${this.day}`, 140, 15, C.lightGray);
+    this.renderer.text(`CAR: ${this.currentCar.name} (${this.currentCar.year})`, 10, 30, C.accent);
+    this.renderer.text(`HP: ${this.currentCar.hp}  WT: ${this.currentCar.weight}  GRP: ${this.currentCar.grip}`, 10, 45, C.text);
+    this.renderer.text(`REL: ${this.currentCar.reliability}%  COND: ${this.currentCar.condition}%`, 10, 58, C.text);
+    this.renderer.text(`VALUE: $${Math.floor(this.currentCar.value * (this.currentCar.condition/100))}`, 10, 72, C.yellow);
+
+    // Hotspots
+    const spots = [
+      {x:10, y:150, w:60, h:20, label:'Classifieds'},
+      {x:80, y:150, w:60, h:20, label:'Parts Shop'},
+      {x:150, y:150, w:60, h:20, label:'Race Map'},
+      {x:220, y:150, w:60, h:20, label:'Sell Car'},
+      {x:10, y:175, w:60, h:20, label:'Tune Car'},
+      {x:80, y:175, w:60, h:20, label:'Repair'}
+    ];
+
+    const mx = this.input.mouseX, my = this.input.mouseY;
+    for (const s of spots) {
+      const hover = mx >= s.x && mx <= s.x+s.w && my >= s.y && my <= s.y+s.h;
+      this.renderer.button(s.x, s.y, s.w, s.h, s.label, hover);
+      if (hover) this.renderer.drawTooltip(mx, my-10, s.label);
+    }
+
+    // Keyboard hints
+    this.renderer.text('[C]lassifieds [P]arts [R]aces [S]ave [L]oad [M]ute', 5, H-4, C.dimText, 6);
+  }
+
+  renderClassifieds() {
+    this.renderer.text('CLASSIFIED ADS', 100, 8, C.black);
+    this.renderer.text('CASH: $' + this.cash, 230, 8, C.black);
+
+    for (let i = 0; i < this.classifieds.length; i++) {
+      const c = this.classifieds[i];
+      const y = 25 + i * 18;
+      const hover = this.input.mouseX >= 5 && this.input.mouseX <= W-5 && this.input.mouseY >= y && this.input.mouseY <= y+16;
+      if (hover) {
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fillRect(5, y, W-10, 16);
+      }
+      this.renderer.text(`${c.year} ${c.name}`, 8, y+6, '#222');
+      this.renderer.text(`$${c.price}`, 100, y+6, c.price <= this.cash ? '#2a8' : '#c44');
+      this.renderer.text(`Cond:${c.condition}%`, 150, y+6, '#444');
+      this.renderer.text(`HP:${c.hp}`, 200, y+6, '#444');
+      this.renderer.text(`Seller: ${c.sellerName}`, 240, y+6, '#555');
+      if (hover) this.renderer.drawTooltip(this.input.mouseX, y-8, `Click to buy. ${c.sellerFirmness} seller.`);
+    }
+
+    this.renderer.button(5, 182, 40, 14, 'BACK',
+      this.input.mouseX >= 5 && this.input.mouseX <= 44 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+  }
+
+  renderParts() {
+    this.renderer.text('PARTS SHOP', 120, 8, C.accent);
+    this.renderer.text(`CASH: $${this.cash}`, 230, 8, C.green);
+
+    for (let i = 0; i < this.partsShop.length; i++) {
+      const p = this.partsShop[i];
+      const col = i % 5, row = Math.floor(i / 5);
+      const bx = 10 + col * 62, by = 30 + row * 28;
+      const hover = this.input.mouseX >= bx && this.input.mouseX <= bx+58 && this.input.mouseY >= by && this.input.mouseY <= by+24;
+      const canBuy = !p.installed && this.cash >= p.cost;
+
+      this.renderer.button(bx, by, 58, 24, p.installed ? 'INSTALLED' : `$${p.cost}`, hover && canBuy);
+      if (hover) {
+        const stats = `HP:${p.stats.hp>0?'+':''}${p.stats.hp} WT:${p.stats.wt>0?'+':''}${p.stats.wt}`;
+        this.renderer.drawTooltip(this.input.mouseX, by-8, `${p.name}\n${stats}`);
+      }
+    }
+
+    this.renderer.button(5, 182, 40, 14, 'BACK',
+      this.input.mouseX >= 5 && this.input.mouseX <= 44 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+  }
+
+  renderRaces() {
+    this.renderer.text('RACE SELECTION', 105, 8, C.yellow);
+    this.renderer.text(`REP: ${this.reputation}`, 230, 8, C.lightGray);
+
+    for (let i = 0; i < RACES.length; i++) {
+      const r = RACES[i];
+      const y = 25 + i * 18;
+      const unlocked = this.reputation >= r.minRep;
+      const hover = this.input.mouseX >= 5 && this.input.mouseX <= W-5 && this.input.mouseY >= y && this.input.mouseY <= y+16;
+
+      if (hover) {
+        ctx.fillStyle = 'rgba(255,255,255,0.1)';
+        ctx.fillRect(5, y, W-10, 16);
+      }
+
+      this.renderer.text(r.name, 10, y+6, unlocked ? C.accent : C.dimText);
+      this.renderer.text(`$${r.purse}`, 140, y+6, unlocked ? C.green : C.dimText);
+      this.renderer.text(`Diff:${r.difficulty}`, 190, y+6, unlocked ? C.orange : C.dimText);
+      this.renderer.text(`Min REP:${r.minRep}`, 240, y+6, unlocked ? C.lightGray : C.dimText);
+
+      if (hover && unlocked) this.renderer.drawTooltip(this.input.mouseX, y-8, 'Click to race!');
+    }
+
+    this.renderer.button(5, 182, 40, 14, 'BACK',
+      this.input.mouseX >= 5 && this.input.mouseX <= 44 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+  }
+
+  renderRacing() {
+    const race = RACES[this.selectedRace];
+    this.renderer.text(race.name, 100, 5, C.yellow);
+
+    // Countdown
+    if (this.racePhase === 'countdown') {
+      const countNum = Math.ceil(this.raceTimer / 60);
+      if (countNum > 0) {
+        this.renderer.text(countNum.toString(), 150, 80, C.yellow, 24);
+      } else {
+        this.renderer.text('GO!', 140, 80, C.green, 20);
+      }
+    }
+
+    // Player car with trail
+    const playerX = 20 + Math.floor(this.playerProgress * (W - 60));
+    if (this.racePhase === 'racing' && Math.random() > 0.5) {
+      this.particles.emit(playerX + 10, 162, 1, '#555', 0.5);
+    }
+    this.renderer.drawCar(playerX, 155, this.currentCar.colorIdx, this.currentCar.bodyStyle);
+
+    // Opponent car
+    const oppX = 20 + Math.floor(this.opponentProgress * (W - 60));
+    this.renderer.drawCar(oppX, 130, Math.floor(Math.random()*CAR_COLORS.length), 'muscle');
+
+    // Lane labels
+    this.renderer.text('YOU', 5, 158, C.green);
+    this.renderer.text('OPP', 5, 133, C.red);
+
+    // Progress bars
+    this.renderer.progressBar(80, 175, W - 90, 6, this.playerProgress * 100, 100, C.green);
+    this.renderer.progressBar(80, 125, W - 90, 6, this.opponentProgress * 100, 100, C.red);
+
+    // Finish line
+    ctx.fillStyle = '#fff';
+    for (let i = 0; i < 30; i++) {
+      ctx.fillRect(W - 35 + (i % 2 === 0 ? 0 : 1), 120 + i * 2, 1, 1);
+    }
+
+    // Result overlay
+    if (this.racePhase === 'finished') {
+      ctx.fillStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillRect(0, 0, W, H);
+
+      if (this.raceResult === 'win') {
+        this.renderer.text('YOU WIN!', 120, 80, C.yellow, 16);
+        const prize = Math.round(race.purse * (0.8 + Math.random() * 0.4));
+        this.renderer.text(`Prize: $${prize}`, 120, 100, C.green);
+      } else if (this.raceResult === 'breakdown') {
+        this.renderer.text('BROKEN DOWN!', 105, 80, C.red, 14);
+        this.renderer.text('Your car gave up!', 105, 98, C.lightGray);
+      } else {
+        this.renderer.text('YOU LOSE', 120, 80, C.red, 16);
+        this.renderer.text('Better luck next time.', 95, 98, C.lightGray);
+      }
+
+      if (Math.floor(Date.now() / 500) % 2 === 0) {
+        this.renderer.text('[ CLICK TO CONTINUE ]', 85, 130, C.yellow);
+      }
+    }
+
+    // Speed display
+    if (this.racePhase === 'racing') {
+      const speed = Math.floor(this.playerProgress * 2.5 + Math.random() * 10);
+      this.renderer.text(`${speed} MPH`, W - 65, 182, C.lightGray);
+    }
+  }
+
+  gameLoop() {
+    this.update();
+    this.render();
+    requestAnimationFrame(() => this.gameLoop());
+  }
+
+  start() {
+    // Try load save
+    const raw = localStorage.getItem('streetGarage89');
+    if (raw) {
+      try {
+        const data = JSON.parse(raw);
+        this.cash = data.cash || 3500;
+        this.reputation = data.reputation || 0;
+        this.carsOwned = data.carsOwned || 1;
+        this.racesWon = data.racesWon || 0;
+        this.day = data.day || 1;
+        if (data.currentCar) Object.assign(this.currentCar, data.currentCar);
+      } catch(e) {}
+    }
+    this.gameLoop();
+  }
+}
+
+// ============================================================
+// INIT
+// ============================================================
+const audio = new AudioManager();
+const game = new Game();
+game.start();
+
+</script>
+</body>
+</html>
+

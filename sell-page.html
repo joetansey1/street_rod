@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Street Garage - Sell Cars</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a12; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// CONSTANTS & SETUP
+// ============================================================
+const COLORS = {
+  bg: '#0a0a12', panelBg: '#141828', panelBorder: '#3a4060',
+  text: '#c8c8d0', dimText: '#5a6070', accent: '#e8c840',
+  green: '#40d060', red: '#e04040', yellow: '#f0c830',
+  lightGray: '#a0a0b0', darkGray: '#2a3040', orange: '#e08030'
+};
+
+const W = 320, H = 200;
+const canvas = document.getElementById('c');
+canvas.width = W; canvas.height = H;
+
+function scaleCanvas() {
+  const s = Math.min(Math.floor(window.innerWidth / W), Math.floor(window.innerHeight / H));
+  canvas.style.width = (W * s) + 'px';
+  canvas.style.height = (H * s) + 'px';
+}
+scaleCanvas();
+window.addEventListener('resize', scaleCanvas);
+
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// ============================================================
+// RENDERER UTILITIES
+// ============================================================
+function drawRect(x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(Math.floor(x), Math.floor(y), w, h); }
+function drawText(str, x, y, color, size) {
+  ctx.fillStyle = color || COLORS.text;
+  ctx.font = (size || 8) + 'px monospace';
+  ctx.fillText(str, Math.floor(x), Math.floor(y));
+}
+function drawTextCentered(str, x, y, color, size) {
+  ctx.fillStyle = color || COLORS.text;
+  ctx.font = (size || 8) + 'px monospace';
+  const tw = ctx.measureText(str).width;
+  ctx.fillText(str, Math.floor(x - tw / 2), Math.floor(y));
+}
+function drawPanel(x, y, w, h) {
+  drawRect(x, y, w, h, COLORS.panelBg);
+  ctx.strokeStyle = COLORS.panelBorder;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+function drawButton(x, y, w, h, label, hover) {
+  drawRect(x, y, w, h, hover ? '#2a3050' : COLORS.darkGray);
+  ctx.strokeStyle = hover ? COLORS.accent : '#4a5070';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  drawTextCentered(label, x + w / 2, y + h / 2 + 3, hover ? COLORS.accent : COLORS.text);
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+const mouse = { x: 0, y: 0 };
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+});
+canvas.addEventListener('click', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+  handleClick(mouse.x, mouse.y);
+});
+
+// ============================================================
+// AUDIO
+// ============================================================
+let audioCtx = null;
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+function playTone(freq, dur, type, vol) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.value = vol || 0.1;
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+function sfxClick() { playTone(800, 0.05, 'square', 0.08); }
+function sfxSelect() { playTone(600, 0.1, 'square', 0.1); playTone(900, 0.15, 'square', 0.08); }
+function sfxError() { playTone(200, 0.2, 'sawtooth', 0.1); }
+function sfxCash() { playTone(1200, 0.08, 'square', 0.1); playTone(1600, 0.12, 'square', 0.08); }
+function sfxSell() { playTone(400, 0.15, 'square', 0.1); playTone(600, 0.2, 'square', 0.08); playTone(800, 0.25, 'square', 0.06); }
+
+// ============================================================
+// GAME DATA
+// ============================================================
+function loadGame() {
+  const d = localStorage.getItem('streetgarage_save');
+  return d ? JSON.parse(d) : null;
+}
+function saveGame() {
+  localStorage.setItem('streetgarage_save', JSON.stringify(gameData));
+}
+
+let gameData = loadGame();
+if (!gameData) { window.location.href = 'index.html'; }
+
+// ============================================================
+// PIXEL ART CAR DRAWING
+// ============================================================
+function drawCar(cx, cy, colorIdx, bodyStyle, scale) {
+  const s = scale || 1;
+  const carColors = ['#c03030','#2060c0','#d0a020','#408040','#e0e0e0','#303050','#8040a0','#c06020'];
+  const col = carColors[colorIdx % carColors.length];
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(s, s);
+
+  drawRect(-30, 28, 60, 4, 'rgba(0,0,0,0.3)');
+  drawRect(-28, 10, 56, 14, col);
+  drawRect(-16, -2, 30, 14, col);
+  drawRect(-12, -6, 22, 5, col);
+  drawRect(-14, -1, 8, 10, '#6090c0');
+  drawRect(-4, -1, 8, 10, '#6090c0');
+  drawRect(6, -1, 8, 10, '#6090c0');
+  drawRect(28, 12, 3, 4, '#ffffa0');
+  drawRect(-30, 12, 3, 4, '#ff4040');
+  drawRect(-31, 22, 62, 3, '#808090');
+  drawRect(-22, 24, 12, 8, '#1a1a1a');
+  drawRect(10, 24, 12, 8, '#1a1a1a');
+  drawRect(-20, 26, 8, 4, '#a0a0b0');
+  drawRect(12, 26, 8, 4, '#a0a0b0');
+  drawRect(14, -2, 8, 3, col);
+
+  ctx.restore();
+}
+
+// ============================================================
+// SELL PAGE STATE
+// ============================================================
+let sellState = 'inventory'; // inventory, confirmSell, sold
+let selectedCarIdx = -1;
+let frameCount = 0;
+
+// ============================================================
+// SELL SCREENS
+// ============================================================
+function drawInventoryScreen() {
+  // Background - garage interior with shelves
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Floor
+  drawRect(0, H - 15, W, 15, '#2a2a38');
+  for (let i = 0; i < W; i += 20) {
+    drawRect(i, H - 15, 18, 1, '#3a3a48');
+  }
+
+  // Header bar
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('GARAGE INVENTORY - SELL CARS', 5, 10, COLORS.accent);
+  drawText(`$${gameData.cash}`, W - 40, 10, COLORS.green);
+
+  if (gameData.cars.length === 0) {
+    drawTextCentered('No cars in garage!', W / 2, 60, COLORS.red);
+    drawTextCentered('Buy a car from classifieds first.', W / 2, 75, COLORS.dimText);
+
+    drawButton(100, H - 30, 120, 14, 'BUY CAR (CLASSIFIEDS)',
+      mouse.x >= 100 && mouse.x <= 220 && mouse.y >= H - 30 && mouse.y <= H - 16);
+    drawButton(5, H - 14, 30, 12, 'MENU',
+      mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+    return;
+  }
+
+  // Car inventory list
+  let py = 20;
+  for (let i = 0; i < gameData.cars.length; i++) {
+    const car = gameData.cars[i];
+    const sellPrice = Math.floor(car.value * 0.7);
+    const isCurrentCar = i === gameData.currentCarIdx;
+
+    const hover = mouse.x >= 10 && mouse.x <= W - 10 && mouse.y >= py && mouse.y <= py + 36;
+    const isSelected = i === selectedCarIdx;
+
+    drawPanel(10, py, W - 20, 34);
+    if (hover) {
+      ctx.strokeStyle = isSelected ? COLORS.green : COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(9.5, py - 0.5, W - 18, 35);
+    }
+
+    // Car mini preview
+    drawCar(40, py + 17, car.colorIdx, car.bodyStyle, 0.5);
+
+    // Car info
+    drawText(`${car.year} ${car.name}`, 60, py + 10, isCurrentCar ? COLORS.green : COLORS.text);
+    drawText(`Value: $${car.value} | Sell: $${sellPrice}`, 60, py + 20, COLORS.lightGray);
+    drawText(`HP:${car.getEffectiveHP()} GRP:${car.getEffectiveGrip()} REL:${car.getEffectiveReliability()}%`, 60, py + 30, COLORS.dimText);
+
+    if (isCurrentCar) {
+      drawText('[CURRENT]', W - 50, py + 14, COLORS.green);
+    }
+
+    // Sell button for this car
+    const sellBtnX = W - 50;
+    const sellBtnY = py + 22;
+    const sellHover = mouse.x >= sellBtnX && mouse.x <= sellBtnX + 45 && mouse.y >= sellBtnY && mouse.y <= sellBtnY + 12;
+    drawButton(sellBtnX, sellBtnY, 45, 12, 'SELL', sellHover);
+
+    py += 38;
+  }
+
+  // Navigation buttons
+  drawButton(5, H - 14, 30, 12, 'MENU',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+function drawConfirmSellScreen() {
+  const car = gameData.cars[selectedCarIdx];
+  if (!car) return;
+
+  const sellPrice = Math.floor(car.value * 0.7);
+
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Header
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('CONFIRM SALE', 5, 10, COLORS.accent);
+
+  // Car preview
+  drawCar(160, 55, car.colorIdx, car.bodyStyle, 1.3);
+
+  // Sale details
+  drawPanel(5, 80, W - 10, 60);
+  drawText(`SELL: ${car.year} ${car.name}`, 15, 92, COLORS.accent);
+  drawText(`Current Value: $${car.value}`, 15, 106, COLORS.lightGray);
+  drawText(`Buyer Offers: $${sellPrice}`, 15, 120, COLORS.green);
+  drawText(`(70% of assessed value)`, 15, 134, COLORS.dimText);
+
+  // Parts bonus
+  const partsCount = Object.values(car.parts).filter(p => p !== null && p !== undefined).length;
+  if (partsCount > 0) {
+    const partsBonus = Math.floor(partsCount * car.value * 0.02);
+    drawText(`Parts bonus: +$${partsBonus}`, 15, 148, COLORS.yellow);
+    drawText(`Final Offer: $${sellPrice + partsBonus}`, 15, 160, COLORS.green);
+  }
+
+  // Warning if selling current car
+  if (selectedCarIdx === gameData.currentCarIdx) {
+    drawTextCentered('WARNING: This is your current car!', W / 2, 175, COLORS.red);
+    drawTextCentered('You will need to select another car.', W / 2, 185, COLORS.dimText);
+  }
+
+  // Buttons
+  drawButton(80, H - 24, 60, 14, 'CONFIRM',
+    mouse.x >= 80 && mouse.x <= 140 && mouse.y >= H - 24 && mouse.y <= H - 10);
+  drawButton(160, H - 24, 60, 14, 'CANCEL',
+    mouse.x >= 160 && mouse.x <= 220 && mouse.y >= H - 24 && mouse.y <= H - 10);
+}
+
+function drawSoldScreen() {
+  const sellPrice = lastSellPrice;
+
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Success animation
+  const blink = Math.floor(frameCount / 15) % 2;
+
+  drawTextCentered('CAR SOLD!', W / 2, 50, COLORS.green);
+  drawTextCentered(`+$${sellPrice}`, W / 2, 70, COLORS.yellow);
+  drawTextCentered(`Cash: $${gameData.cash}`, W / 2, 90, COLORS.green);
+
+  if (blink) {
+    drawTextCentered('[ CLICK TO CONTINUE ]', W / 2, 130, COLORS.accent);
+  }
+
+  drawButton(5, H - 14, 30, 12, 'MENU',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+let lastSellPrice = 0;
+
+// ============================================================
+// CLICK HANDLER
+// ============================================================
+function handleClick(mx, my) {
+  initAudio();
+
+  if (sellState === 'inventory') {
+    // Check sell buttons for each car
+    let py = 20;
+    for (let i = 0; i < gameData.cars.length; i++) {
+      const sellBtnX = W - 50;
+      const sellBtnY = py + 22;
+
+      if (mx >= sellBtnX && mx <= sellBtnX + 45 && my >= sellBtnY && my <= sellBtnY + 12) {
+        sfxSelect();
+        selectedCarIdx = i;
+        sellState = 'confirmSell';
+        return;
+      }
+
+      // Also allow clicking the car panel to select it
+      if (mx >= 10 && mx <= W - 55 && my >= py && my <= py + 34) {
+        sfxClick();
+        selectedCarIdx = i;
+      }
+
+      py += 38;
+    }
+
+    // Buy car button (if no cars)
+    if (gameData.cars.length === 0 && mx >= 100 && mx <= 220 && my >= H - 30 && my <= H - 16) {
+      sfxClick();
+      window.location.href = 'index.html'; // Redirect to main game
+    }
+
+    // Menu button
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      window.location.href = 'index.html';
+    }
+  } else if (sellState === 'confirmSell') {
+    const car = gameData.cars[selectedCarIdx];
+
+    // Confirm button
+    if (mx >= 80 && mx <= 140 && my >= H - 24 && my <= H - 10) {
+      sfxSell();
+
+      const sellPrice = Math.floor(car.value * 0.7);
+      const partsCount = Object.values(car.parts).filter(p => p !== null && p !== undefined).length;
+      const partsBonus = Math.floor(partsCount * car.value * 0.02);
+      lastSellPrice = sellPrice + partsBonus;
+
+      gameData.cash += lastSellPrice;
+
+      // Remove car from inventory
+      gameData.cars.splice(selectedCarIdx, 1);
+
+      // Fix current car index
+      if (gameData.currentCarIdx >= gameData.cars.length) {
+        gameData.currentCarIdx = gameData.cars.length > 0 ? 0 : -1;
+      } else if (selectedCarIdx < gameData.currentCarIdx) {
+        gameData.currentCarIdx--;
+      }
+
+      saveGame();
+      sellState = 'sold';
+    }
+
+    // Cancel button
+    if (mx >= 160 && mx <= 220 && my >= H - 24 && my <= H - 10) {
+      sfxClick();
+      sellState = 'inventory';
+    }
+  } else if (sellState === 'sold') {
+    // Click anywhere to continue
+    sellState = 'inventory';
+
+    // Menu button
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      window.location.href = 'index.html';
+    }
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+function gameLoop() {
+  frameCount++;
+
+  if (sellState === 'inventory') drawInventoryScreen();
+  else if (sellState === 'confirmSell') drawConfirmSellScreen();
+  else if (sellState === 'sold') drawSoldScreen();
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
+

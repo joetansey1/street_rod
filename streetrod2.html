@@ -1,0 +1,2084 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Street Garage '89</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a12; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; cursor: default; }
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<script>
+// ============================================================
+// STREET GARAGE '89 - DOS-Inspired Car Management Game
+// ============================================================
+
+const canvas = document.getElementById('gc');
+const ctx = canvas.getContext('2d');
+
+// Low-res DOS viewport scaled up
+const W = 320;
+const H = 200;
+canvas.width = W;
+canvas.height = H;
+
+const SCALE = Math.min(Math.floor(window.innerWidth / W), Math.floor(window.innerHeight / H));
+canvas.style.width = (W * SCALE) + 'px';
+canvas.style.height = (H * SCALE) + 'px';
+
+// ============================================================
+// COLOR PALETTE - EGA/VGA inspired
+// ============================================================
+const C = {
+  bg: '#0a0a12',
+  darkBg: '#141420',
+  panelBg: '#1a1a2e',
+  panelBorder: '#3a3a5c',
+  text: '#b0b0c8',
+  lightGray: '#9a9ab0',
+  darkGray: '#5a5a70',
+  yellow: '#e8d44d',
+  green: '#4de84d',
+  red: '#e84d4d',
+  orange: '#e89a4d',
+  blue: '#4d7ae8',
+  cyan: '#4de8e8',
+  white: '#f0f0ff',
+  accent: '#c87a2e',
+  brown: '#6b4226',
+  tireBlack: '#1a1a1a',
+  metal: '#808090',
+  rust: '#8b4513',
+};
+
+// ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
+function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// ============================================================
+// DATA TABLES
+// ============================================================
+
+const CAR_COLORS = ['#c83030','#2a5ac8','#e8d44d','#4de84d','#c87a2e','#f0f0ff','#1a1a1a','#6b4226'];
+
+const CAR_TEMPLATES = [
+  { name: 'Vulture Falcon', year: 1966, horsepower: 280, weight: 3200, grip: 55, reliability: 60, value: 4500, colorIdx: 2, bodyStyle: 'muscle' },
+  { name: 'Bravado 440', year: 1969, horsepower: 350, weight: 3800, grip: 45, reliability: 50, value: 6200, colorIdx: 0, bodyStyle: 'muscle' },
+  { name: 'Kodiak GT', year: 1971, horsepower: 320, weight: 3500, grip: 60, reliability: 55, value: 5800, colorIdx: 1, bodyStyle: 'coupe' },
+  { name: 'Sparrow Coupe', year: 1974, horsepower: 180, weight: 2600, grip: 70, reliability: 75, value: 3200, colorIdx: 4, bodyStyle: 'coupe' },
+  { name: 'Ironhorse Fastback', year: 1968, horsepower: 300, weight: 3400, grip: 50, reliability: 45, value: 5200, colorIdx: 6, bodyStyle: 'fastback' },
+  { name: 'Thunderbolt V8', year: 1970, horsepower: 380, weight: 4000, grip: 40, reliability: 35, value: 7500, colorIdx: 0, bodyStyle: 'muscle' },
+  { name: 'Peregrine Sport', year: 1973, horsepower: 220, weight: 2800, grip: 65, reliability: 70, value: 4000, colorIdx: 3, bodyStyle: 'sport' },
+  { name: 'Mammoth Sedan', year: 1972, horsepower: 200, weight: 3600, grip: 55, reliability: 80, value: 2800, colorIdx: 7, bodyStyle: 'sedan' },
+];
+
+const PARTS_DATA = [
+  { id:'carb', name:'Carburetor', cat:'engine', baseCost:400, hpBonus:25, relPenalty:-3 },
+  { id:'intake', name:'Cold Intake', cat:'engine', baseCost:300, hpBonus:15, relPenalty:-2 },
+  { id:'exhaust', name:'Headers+Exhaust', cat:'engine', baseCost:350, hpBonus:20, relPenalty:-1 },
+  { id:'cam', name:'Performance Cam', cat:'engine', baseCost:500, hpBonus:35, relPenalty:-5 },
+  { id:'tires', name:'Racing Tires', cat:'grip', baseCost:350, gripBonus:15 },
+  { id:'trans', name:'Close-Ratio Trans', cat:'handling', baseCost:600, hpBonus:10, gripBonus:5 },
+  { id:'diff', name:'Limited-Slip Diff', cat:'handling', baseCost:450, gripBonus:12 },
+  { id:'weight', name:'Weight Reduction', cat:'performance', baseCost:300, weightBonus:-200 },
+  { id:'cooling', name:'Upgraded Cooling', cat:'reliability', baseCost:250, relBonus:10 },
+  { id:'brakes', name:'Disc Brakes', cat:'reliability', baseCost:400, relBonus:8, gripBonus:3 },
+];
+
+const RACES = [
+  { name:'Back Alley Sprint', distance:402, purse:500, difficulty:1, minRep:0 },
+  { name:'Highway Run', distance:804, purse:1200, difficulty:2, minRep:5 },
+  { name:'Industrial Park', distance:603, purse:800, difficulty:2, minRep:3 },
+  { name:'Coastal Highway', distance:1005, purse:2000, difficulty:3, minRep:8 },
+  { name:'Downtown Dash', distance:502, purse:1500, difficulty:3, minRep:6 },
+  { name:'Mountain Pass', distance:1207, purse:3500, difficulty:4, minRep:12 },
+  { name:'Midnight Mile', distance:1609, purse:5000, difficulty:5, minRep:18 },
+  { name:'Championship Run', distance:2011, purse:8000, difficulty:6, minRep:25 },
+];
+
+const SELLER_NAMES = ['Big Tony','Sal the Mechanic','Old Man Jenkins','Ricky Racer','Duke','Mama Rosa','Lefty','Pops','Vinnie','Gus'];
+
+// ============================================================
+// AUDIO MANAGER - Web Audio API retro sounds
+// ============================================================
+class AudioManager {
+  constructor() {
+    this.ctx = null;
+    this.muted = false;
+    try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  }
+
+  resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); }
+
+  play(type) {
+    if (this.muted || !this.ctx) return;
+    this.resume();
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    switch(type) {
+      case 'blip':
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(800, now);
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+        osc.start(now); osc.stop(now + 0.08);
+        break;
+      case 'select':
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.setValueAtTime(900, now + 0.05);
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.start(now); osc.stop(now + 0.12);
+        break;
+      case 'cash':
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(1200, now);
+        osc.frequency.setValueAtTime(1600, now + 0.06);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        osc.start(now); osc.stop(now + 0.15);
+        break;
+      case 'wrench':
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(200, now);
+        osc.frequency.exponentialRampToValueAtTime(80, now + 0.15);
+        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+        osc.start(now); osc.stop(now + 0.15);
+        break;
+      case 'countdown':
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(440, now);
+        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.start(now); osc.stop(now + 0.2);
+        break;
+      case 'go':
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(880, now);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        osc.start(now); osc.stop(now + 0.4);
+        break;
+      case 'win':
+        osc.type = 'square';
+        [523,659,784,1047].forEach((f,i) => {
+          osc.frequency.setValueAtTime(f, now + i*0.12);
+        });
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+        osc.start(now); osc.stop(now + 0.5);
+        break;
+      case 'lose':
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(400, now);
+        osc.frequency.exponentialRampToValueAtTime(150, now + 0.4);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        osc.start(now); osc.stop(now + 0.4);
+        break;
+      case 'engine':
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(60, now);
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+        osc.start(now); osc.stop(now + 0.3);
+        break;
+      case 'error':
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(200, now);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.start(now); osc.stop(now + 0.2);
+        break;
+    }
+  }
+
+  toggleMute() { this.muted = !this.muted; return this.muted; }
+}
+
+// ============================================================
+// INPUT MANAGER
+// ============================================================
+class InputManager {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.mouseX = 0;
+    this.mouseY = 0;
+    this.clicked = false;
+    this.keys = {};
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      this.mouseX = Math.floor((e.clientX - rect.left) / SCALE);
+      this.mouseY = Math.floor((e.clientY - rect.top) / SCALE);
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      this.clicked = true;
+    });
+
+    canvas.addEventListener('mouseup', () => { this.clicked = false; });
+
+    window.addEventListener('keydown', (e) => {
+      this.keys[e.key.toLowerCase()] = true;
+    });
+
+    window.addEventListener('keyup', (e) => {
+      this.keys[e.key.toLowerCase()] = false;
+    });
+
+    // Prevent context menu on right click
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  consumeClick() {
+    if (this.clicked) { this.clicked = false; return true; }
+    return false;
+  }
+
+  isKeyDown(key) { return !!this.keys[key.toLowerCase()]; }
+}
+
+// ============================================================
+// RENDERER - Canvas drawing primitives
+// ============================================================
+class Renderer {
+  constructor(ctx) {
+    this.ctx = ctx;
+  }
+
+  clear(color) {
+    this.ctx.fillStyle = color || C.bg;
+    this.ctx.fillRect(0, 0, W, H);
+  }
+
+  rect(x, y, w, h, color) {
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(Math.floor(x), Math.floor(y), w, h);
+  }
+
+  text(str, x, y, color, size) {
+    this.ctx.fillStyle = color || C.text;
+    const s = size || 8;
+    this.ctx.font = `${s}px monospace`;
+    this.ctx.fillText(str, Math.floor(x), Math.floor(y));
+  }
+
+  textCentered(str, x, y, color, size) {
+    const s = size || 8;
+    this.ctx.font = `${s}px monospace`;
+    const tw = this.ctx.measureText(str).width;
+    this.text(str, x - tw / 2, y, color, size);
+  }
+
+  panel(x, y, w, h, bgColor, borderColor) {
+    this.rect(x - 1, y - 1, w + 2, h + 2, borderColor || C.panelBorder);
+    this.rect(x, y, w, h, bgColor || C.panelBg);
+  }
+
+  button(x, y, w, h, label, hover) {
+    this.rect(x - 1, y - 1, w + 2, h + 2, hover ? C.yellow : C.panelBorder);
+    this.rect(x, y, w, h, hover ? '#2a2a3e' : C.panelBg);
+    this.textCentered(label, x + w / 2, y + h - 3, hover ? C.yellow : C.text);
+    return hover;
+  }
+
+  progressBar(x, y, w, h, value, max, color) {
+    this.rect(x - 1, y - 1, w + 2, h + 2, C.panelBorder);
+    this.rect(x, y, w, h, '#0a0a12');
+    const fill = Math.floor((value / max) * w);
+    this.rect(x, y, fill, h, color || C.green);
+  }
+
+  drawStars(x, y, count, max) {
+    for (let i = 0; i < max; i++) {
+      this.text(i < count ? '★' : '☆', x + i * 10, y, i < count ? C.yellow : C.darkGray);
+    }
+  }
+
+  drawTooltip(mx, my, text) {
+    const tw = this.ctx.measureText(text).width + 8;
+    let tx = mx - tw / 2;
+    if (tx < 0) tx = 2;
+    if (tx + tw > W) tx = W - tw - 2;
+    this.panel(tx, my, tw, 14, '#0a0a12', C.yellow);
+    this.textCentered(text, tx + tw / 2, my + 10, C.yellow);
+  }
+
+  // ---- DRAW PIXEL ART CAR (side view) ----
+  drawCar(x, y, colorIdx, bodyStyle) {
+    const c = CAR_COLORS[colorIdx] || '#c83030';
+    const cx = Math.floor(x);
+    const cy = Math.floor(y);
+
+    // Shadow
+    this.rect(cx + 5, cy + 28, 70, 3, 'rgba(0,0,0,0.4)');
+
+    // Body shape based on style
+    if (bodyStyle === 'muscle') {
+      // Hood
+      this.rect(cx + 5, cy + 10, 25, 8, c);
+      // Cabin
+      this.rect(cx + 25, cy + 4, 30, 14, c);
+      // Roof
+      this.rect(cx + 28, cy, 24, 6, c);
+      // Trunk
+      this.rect(cx + 55, cy + 8, 20, 10, c);
+      // Lower body
+      this.rect(cx + 5, cy + 18, 70, 6, c);
+      // Bumper front
+      this.rect(cx + 2, cy + 16, 5, 8, C.metal);
+      // Bumper rear
+      this.rect(cx + 73, cy + 16, 5, 8, C.metal);
+      // Windows
+      this.rect(cx + 27, cy + 5, 13, 8, '#4a6a9a');
+      this.rect(cx + 42, cy + 5, 13, 8, '#4a6a9a');
+      // Headlight
+      this.rect(cx + 3, cy + 12, 3, 4, '#ffffaa');
+      // Taillight
+      this.rect(cx + 75, cy + 12, 3, 4, '#ff3030');
+    } else if (bodyStyle === 'coupe') {
+      this.rect(cx + 8, cy + 10, 22, 7, c);
+      this.rect(cx + 26, cy + 4, 28, 13, c);
+      this.rect(cx + 29, cy, 22, 6, c);
+      this.rect(cx + 54, cy + 9, 18, 8, c);
+      this.rect(cx + 8, cy + 17, 64, 5, c);
+      this.rect(cx + 5, cy + 15, 4, 7, C.metal);
+      this.rect(cx + 72, cy + 15, 4, 7, C.metal);
+      this.rect(cx + 28, cy + 5, 12, 7, '#4a6a9a');
+      this.rect(cx + 42, cy + 5, 12, 7, '#4a6a9a');
+      this.rect(cx + 3, cy + 12, 3, 4, '#ffffaa');
+      this.rect(cx + 74, cy + 12, 3, 4, '#ff3030');
+    } else if (bodyStyle === 'fastback') {
+      this.rect(cx + 5, cy + 10, 28, 7, c);
+      this.rect(cx + 28, cy + 3, 25, 14, c);
+      this.rect(cx + 30, cy - 1, 20, 6, c);
+      this.rect(cx + 53, cy + 7, 22, 10, c);
+      this.rect(cx + 53, cy + 14, 20, 6, c);
+      this.rect(cx + 5, cy + 17, 68, 5, c);
+      this.rect(cx + 2, cy + 15, 4, 7, C.metal);
+      this.rect(cx + 73, cy + 15, 4, 7, C.metal);
+      this.rect(cx + 30, cy + 4, 11, 8, '#4a6a9a');
+      this.rect(cx + 43, cy + 4, 10, 8, '#4a6a9a');
+      this.rect(cx + 2, cy + 12, 3, 4, '#ffffaa');
+      this.rect(cx + 75, cy + 12, 3, 4, '#ff3030');
+    } else if (bodyStyle === 'sport') {
+      this.rect(cx + 10, cy + 10, 20, 6, c);
+      this.rect(cx + 27, cy + 4, 26, 12, c);
+      this.rect(cx + 30, cy, 20, 6, c);
+      this.rect(cx + 53, cy + 9, 16, 7, c);
+      this.rect(cx + 10, cy + 16, 59, 5, c);
+      this.rect(cx + 7, cy + 14, 4, 6, C.metal);
+      this.rect(cx + 71, cy + 14, 4, 6, C.metal);
+      this.rect(cx + 29, cy + 5, 11, 7, '#4a6a9a');
+      this.rect(cx + 42, cy + 5, 11, 7, '#4a6a9a');
+      this.rect(cx + 5, cy + 12, 3, 4, '#ffffaa');
+      this.rect(cx + 73, cy + 12, 3, 4, '#ff3030');
+    } else { // sedan default
+      this.rect(cx + 8, cy + 10, 24, 7, c);
+      this.rect(cx + 28, cy + 3, 26, 14, c);
+      this.rect(cx + 30, cy - 1, 22, 6, c);
+      this.rect(cx + 54, cy + 8, 18, 9, c);
+      this.rect(cx + 8, cy + 17, 64, 5, c);
+      this.rect(cx + 5, cy + 15, 4, 7, C.metal);
+      this.rect(cx + 72, cy + 15, 4, 7, C.metal);
+      this.rect(cx + 30, cy + 4, 11, 8, '#4a6a9a');
+      this.rect(cx + 43, cy + 4, 11, 8, '#4a6a9a');
+      this.rect(cx + 3, cy + 12, 3, 4, '#ffffaa');
+      this.rect(cx + 75, cy + 12, 3, 4, '#ff3030');
+    }
+
+    // Wheels (same for all)
+    this.rect(cx + 12, cy + 22, 14, 8, C.tireBlack);
+    this.rect(cx + 14, cy + 23, 10, 6, '#3a3a3a');
+    this.rect(cx + 17, cy + 25, 4, 2, '#6a6a6a');
+
+    this.rect(cx + 54, cy + 22, 14, 8, C.tireBlack);
+    this.rect(cx + 56, cy + 23, 10, 6, '#3a3a3a');
+    this.rect(cx + 59, cy + 25, 4, 2, '#6a6a6a');
+  }
+
+  // ---- DRAW GARAGE SCENE ----
+  drawGarageScene() {
+    // Floor
+    this.rect(0, H - 35, W, 35, '#1a1a24');
+    // Floor tiles
+    for (let i = 0; i < W; i += 20) {
+      this.rect(i, H - 35, 19, 1, '#2a2a38');
+    }
+
+    // Back wall
+    this.rect(0, 20, W, H - 55, '#1e1e30');
+
+    // Wall details - posters
+    this.panel(8, 25, 30, 22, '#1a1a2e', C.panelBorder);
+    this.text('RACE', 14, 35, C.red);
+    this.text('FAST', 12, 44, C.yellow);
+
+    this.panel(280, 25, 30, 22, '#1a1a2e', C.panelBorder);
+    this.text('OIL', 286, 35, C.orange);
+    this.text('CHANGE', 278, 44, C.lightGray);
+
+    // Shelves on wall
+    this.rect(50, 30, 80, 2, C.brown);
+    this.rect(55, 32, 8, 10, '#4a6a9a'); // oil can
+    this.rect(68, 32, 10, 8, '#9a4a4a'); // part box
+    this.rect(82, 34, 6, 6, '#4a9a4a'); // small can
+    this.rect(200, 30, 80, 2, C.brown);
+    this.rect(210, 32, 12, 8, '#6a4a2a'); // box
+    this.rect(226, 32, 8, 10, '#4a4a9a'); // bottle
+    this.rect(238, 34, 10, 6, '#9a9a4a'); // can
+
+    // Tool chest (left side)
+    this.rect(10, 85, 35, 40, '#6a4a2a');
+    this.rect(12, 87, 31, 10, '#5a3a1a');
+    this.rect(12, 98, 31, 10, '#5a3a1a');
+    this.rect(12, 109, 31, 14, '#5a3a1a');
+    this.rect(20, 90, 12, 3, C.metal); // handle
+    this.rect(20, 101, 12, 3, C.metal);
+    this.rect(20, 114, 12, 3, C.metal);
+
+    // Workbench (right side)
+    this.rect(250, 80, 60, 45, '#5a3a1a');
+    this.rect(252, 82, 56, 30, '#4a2a10');
+    // Tools on workbench
+    this.rect(258, 76, 3, 10, C.metal); // wrench
+    this.rect(265, 78, 10, 3, C.metal); // screwdriver
+    this.rect(280, 74, 5, 12, '#9a4a4a'); // spray can
+
+    // Oil stains on floor
+    this.rect(80, H - 25, 15, 3, 'rgba(40,30,20,0.6)');
+    this.rect(150, H - 30, 20, 4, 'rgba(40,30,20,0.5)');
+    this.rect(220, H - 20, 12, 3, 'rgba(40,30,20,0.6)');
+
+    // Tires stacked
+    this.rect(45, H - 50, 12, 12, C.tireBlack);
+    this.rect(47, H - 48, 8, 8, '#2a2a2a');
+    this.rect(45, H - 62, 12, 12, C.tireBlack);
+    this.rect(47, H - 60, 8, 8, '#2a2a2a');
+
+    // Hanging light
+    this.rect(158, 0, 4, 20, '#3a3a3a');
+    this.rect(150, 20, 20, 6, '#4a4a3a');
+    this.rect(152, 26, 16, 2, '#ffffaa');
+    // Light glow
+    this.rect(140, 28, 40, 3, 'rgba(255,255,170,0.08)');
+
+    // Ceiling
+    this.rect(0, 0, W, 20, '#141420');
+    this.rect(0, 18, W, 2, '#1a1a2e');
+  }
+
+  // ---- DRAW RACE BACKGROUND ----
+  drawRaceBackground() {
+    this.clear('#0a0a18');
+
+    // Sky gradient (DOS style - stepped)
+    this.rect(0, 0, W, 40, '#1a1a30');
+    this.rect(0, 40, W, 20, '#1e1e38');
+    this.rect(0, 60, W, 20, '#222240');
+
+    // Stars
+    for (let i = 0; i < 20; i++) {
+      const sx = (i * 37 + 13) % W;
+      const sy = (i * 23 + 7) % 50;
+      this.rect(sx, sy, 1, 1, '#ffffff');
+    }
+
+    // Road
+    this.rect(0, 120, W, 60, '#2a2a30');
+    this.rect(0, 120, W, 2, '#4a4a50');
+    this.rect(0, 178, W, 2, '#4a4a50');
+
+    // Road markings
+    for (let i = 0; i < W; i += 16) {
+      this.rect(i, 148, 8, 2, '#6a6a50');
+    }
+
+    // Buildings silhouette
+    this.rect(10, 65, 20, 55, '#1a1a28');
+    this.rect(35, 70, 15, 50, '#1a1a28');
+    this.rect(55, 60, 25, 60, '#1a1a28');
+    this.rect(85, 75, 18, 45, '#1a1a28');
+    this.rect(110, 65, 22, 55, '#1a1a28');
+    this.rect(140, 70, 16, 50, '#1a1a28');
+    this.rect(165, 58, 30, 62, '#1a1a28');
+    this.rect(200, 68, 20, 52, '#1a1a28');
+    this.rect(225, 72, 18, 48, '#1a1a28');
+    this.rect(250, 63, 25, 57, '#1a1a28');
+    this.rect(280, 67, 20, 53, '#1a1a28');
+    this.rect(300, 74, 20, 46, '#1a1a28');
+
+    // Windows in buildings
+    for (let i = 0; i < 30; i++) {
+      const wx = (i * 41 + 5) % W;
+      const wy = 68 + (i * 17 % 40);
+      if (Math.random() > 0.3) {
+        this.rect(wx, wy, 2, 2, '#ffffaa');
+      }
+    }
+
+    // Ground below road
+    this.rect(0, 180, W, 20, '#1a1a24');
+  }
+
+  // ---- DRAW NEWSPAPER HEADER ----
+  drawNewspaperHeader() {
+    this.rect(0, 0, W, 18, C.panelBg);
+    this.textCentered('★ THE DAILY GARAGE ★ CLASSIFIED SECTION ★', W / 2, 12, C.yellow);
+    this.rect(0, 18, W, 1, C.panelBorder);
+  }
+
+  // ---- DRAW PARTS SHOP HEADER ----
+  drawPartsShopHeader() {
+    this.rect(0, 0, W, 18, C.panelBg);
+    this.textCentered('★ AUTO PARTS & SUPPLY ★', W / 2, 12, C.orange);
+    this.rect(0, 18, W, 1, C.panelBorder);
+  }
+
+  // ---- DRAW INSTALL SCREEN HEADER ----
+  drawInstallHeader() {
+    this.rect(0, 0, W, 18, C.panelBg);
+    this.textCentered('★ WORKBENCH - INSTALL PARTS ★', W / 2, 12, C.cyan);
+    this.rect(0, 18, W, 1, C.panelBorder);
+  }
+
+  // ---- DRAW TUNE SCREEN HEADER ----
+  drawTuneHeader() {
+    this.rect(0, 0, W, 18, C.panelBg);
+    this.textCentered('★ ENGINE TUNING BAY ★', W / 2, 12, C.cyan);
+    this.rect(0, 18, W, 1, C.panelBorder);
+  }
+
+  // ---- DRAW SELL SCREEN HEADER ----
+  drawSellHeader() {
+    this.rect(0, 0, W, 18, C.panelBg);
+    this.textCentered('★ SELL YOUR CAR ★', W / 2, 12, C.red);
+    this.rect(0, 18, W, 1, C.panelBorder);
+  }
+
+  // ---- DRAW TITLE SCREEN ----
+  drawTitleScreen() {
+    this.clear(C.bg);
+
+    // Decorative border
+    this.rect(10, 10, W - 20, H - 20, C.panelBorder);
+    this.rect(12, 12, W - 24, H - 24, C.bg);
+
+    // Title
+    this.textCentered('STREET GARAGE', W / 2, 30, C.yellow, 14);
+    this.textCentered("'89", W / 2, 46, C.orange, 10);
+
+    // Subtitle
+    this.textCentered('A Car Management Game', W / 2, 60, C.lightGray);
+
+    // Decorative line
+    this.rect(40, 68, W - 80, 1, C.panelBorder);
+
+    // Instructions
+    this.textCentered('Buy used cars. Fix them up.', W / 2, 80, C.text);
+    this.textCentered('Race the streets. Earn cash.', W / 2, 90, C.text);
+    this.textCentered('Build your reputation.', W / 2, 100, C.text);
+
+    // Controls
+    this.rect(30, 112, W - 60, 45, C.panelBg);
+    this.textCentered('CONTROLS', W / 2, 118, C.accent);
+    this.textCentered('Mouse: Click UI elements', W / 2, 128, C.lightGray);
+    this.textCentered('C=Classifieds G=Garage P=Parts', W / 2, 138, C.lightGray);
+    this.textCentered('R=Races S=Save L=Load M=Mute', W / 2, 148, C.lightGray);
+
+    // Start prompt
+    if (Math.floor(Date.now() / 500) % 2 === 0) {
+      this.textCentered('[ CLICK TO START ]', W / 2, 170, C.yellow);
+    }
+
+    // Version
+    this.textCentered('v1.0 - Single Player', W / 2, H - 16, C.darkGray);
+  }
+
+  // ---- DRAW SAVE/LOAD SCREEN ----
+  drawSaveLoadScreen(mode) {
+    this.clear(C.darkBg);
+
+    const title = mode === 'save' ? 'SAVE GAME' : 'LOAD GAME';
+    this.textCentered(title, W / 2, 10, C.yellow);
+
+    if (mode === 'load') {
+      const raw = localStorage.getItem('streetGarage89');
+      if (raw) {
+        try {
+          const data = JSON.parse(raw);
+          this.textCentered('Save found!', W / 2, 30, C.green);
+          this.textCentered(`Cash: $${data.cash || 0}`, W / 2, 45, C.text);
+          this.textCentered(`Day: ${data.day || 1}`, W / 2, 58, C.text);
+          this.textCentered(`Reputation: ${data.reputation || 0}`, W / 2, 71, C.text);
+          if (data.currentCar) {
+            this.textCentered(`Car: ${data.currentCar.name || 'Unknown'}`, W / 2, 84, C.text);
+          }
+        } catch(e) {
+          this.textCentered('Corrupted save data.', W / 2, 30, C.red);
+        }
+      } else {
+        this.textCentered('No save found.', W / 2, 30, C.red);
+      }
+    } else {
+      this.textCentered('Game will be saved.', W / 2, 30, C.green);
+      this.textCentered(`Cash: $${this.cash}`, W / 2, 45, C.text);
+      this.textCentered(`Day: ${this.day}`, W / 2, 58, C.text);
+      this.textCentered(`Reputation: ${this.reputation}`, W / 2, 71, C.text);
+      if (this.currentCar) {
+        this.textCentered(`Car: ${this.currentCar.name}`, W / 2, 84, C.text);
+      }
+    }
+
+    this.rect(30, 100, W - 60, 2, C.panelBorder);
+
+    if (Math.floor(Date.now() / 500) % 2 === 0) {
+      this.textCentered('[ CLICK TO CONFIRM ]', W / 2, 120, C.yellow);
+    }
+
+    this.textCentered('[ ESC to cancel ]', W / 2, 140, C.lightGray);
+  }
+
+  // ---- DRAW MESSAGE OVERLAY ----
+  drawMessage(msg) {
+    if (!msg || msg === '') return;
+    this.rect(0, H - 22, W, 22, 'rgba(10,10,18,0.9)');
+    this.rect(0, H - 23, W, 1, C.panelBorder);
+    this.textCentered(msg, W / 2, H - 10, C.yellow);
+  }
+
+  // ---- DRAW MUTED INDICATOR ----
+  drawMutedIndicator(muted) {
+    if (muted) {
+      this.text('MUTE', W - 35, H - 8, C.red);
+    }
+  }
+}
+
+// ============================================================
+// CAR CLASS
+// ============================================================
+class Car {
+  constructor(template, condition) {
+    this.name = template.name;
+    this.year = template.year;
+    this.horsepower = template.horsepower;
+    this.weight = template.weight;
+    this.grip = template.grip;
+    this.reliability = template.reliability;
+    this.baseValue = template.value;
+    this.colorIdx = template.colorIdx;
+    this.bodyStyle = template.bodyStyle || 'coupe';
+
+    // Condition affects stats
+    const condFactor = (condition || 70) / 100;
+    this.condition = condition || 70;
+    this.horsepower = Math.round(this.horsepower * condFactor);
+    this.reliability = Math.round(this.reliability * condFactor);
+
+    // Parts installed
+    this.parts = {};
+    this.hiddenIssues = [];
+  }
+
+  getPerformanceRating() {
+    return Math.round((this.horsepower / this.weight * 100 + this.grip) * (this.reliability / 100));
+  }
+
+  getValue() {
+    let val = this.baseValue * (this.condition / 100);
+    // Add value for installed parts
+    for (const key in this.parts) {
+      val += this.parts[key].baseCost * 0.6;
+    }
+    return Math.round(val);
+  }
+
+  getSellPrice() {
+    return Math.round(this.getValue() * rand(70, 90) / 100);
+  }
+
+  getRepairCost() {
+    const needed = 100 - this.condition;
+    return Math.round(needed * 25);
+  }
+
+  addPart(part) {
+    this.parts[part.id] = part;
+    if (part.hpBonus) this.horsepower += part.hpBonus;
+    if (part.gripBonus) this.grip = Math.min(100, this.grip + part.gripBonus);
+    if (part.relBonus) this.reliability = Math.min(100, this.reliability + part.relBonus);
+    if (part.relPenalty) this.reliability = Math.max(5, this.reliability + part.relPenalty);
+    if (part.weightBonus) this.weight += part.weightBonus;
+  }
+
+  clone() {
+    const c = new Car({ name: this.name, year: this.year, horsepower: this.horsepower, weight: this.weight, grip: this.grip, reliability: this.reliability, value: this.baseValue, colorIdx: this.colorIdx, bodyStyle: this.bodyStyle }, this.condition);
+    c.parts = JSON.parse(JSON.stringify(this.parts));
+    c.hiddenIssues = [...this.hiddenIssues];
+    return c;
+  }
+}
+
+// ============================================================
+// MAIN GAME CLASS
+// ============================================================
+class Game {
+  constructor() {
+    this.input = new InputManager(canvas);
+    this.renderer = new Renderer(ctx);
+    this.audio = new AudioManager();
+
+    // Game state
+    this.screen = 'title'; // title, garage, classifieds, inspect, partsShop, install, tune, sellCar, raceSelect, racing, results
+    this.cash = 3500;
+    this.reputation = 0;
+    this.carsOwned = 1;
+    this.racesWon = 0;
+    this.day = 1;
+
+    // Current car (start with a basic one)
+    const starterTemplate = CAR_TEMPLATES[3]; // Sparrow Coupe - affordable
+    this.currentCar = new Car(starterTemplate, 65);
+
+    // Classified ads
+    this.classifiedAds = [];
+    this.selectedAd = -1;
+
+    // Parts shop
+    this.availableParts = [];
+    this.selectedPartIdx = -1;
+
+    // Race state
+    this.selectedRace = 0;
+    this.racePhase = 'countdown'; // countdown, racing, finished
+    this.raceTimer = 180; // 3 seconds countdown at 60fps
+    this.playerProgress = 0;
+    this.opponentProgress = 0;
+    this.raceResult = ''; // win, lose, breakdown
+
+    // UI state
+    this.message = '';
+    this.messageTimer = 0;
+    this.frameCount = 0;
+
+    // Generate initial classifieds
+    this.generateClassifieds();
+    this.generateAvailableParts();
+
+    // Bind click handler
+    canvas.addEventListener('click', () => { this.audio.resume(); });
+  }
+
+  // ---- CLASSIFIEDS GENERATION ----
+  generateClassifieds() {
+    this.classifiedAds = [];
+    for (let i = 0; i < rand(6, 10); i++) {
+      const template = CAR_TEMPLATES[rand(0, CAR_TEMPLATES.length - 1)];
+      const condition = rand(25, 90);
+      const mileage = rand(10000, 200000);
+
+      // Calculate asking price - ensure it's always a valid number
+      const baseValue = template.value || 3000;
+      const condFactor = condition / 100;
+      const priceVariance = rand(-500, 500);
+      let askingPrice = Math.round(baseValue * condFactor + priceVariance);
+      askingPrice = Math.max(300, askingPrice); // Minimum price
+
+      // Hidden issues
+      const hiddenIssues = [];
+      if (Math.random() < 0.3) hiddenIssues.push('bad transmission');
+      if (Math.random() < 0.25) hiddenIssues.push('rust spots');
+      if (Math.random() < 0.2) hiddenIssues.push('leaking oil');
+      if (Math.random() < 0.15) hiddenIssues.push('worn brakes');
+
+      const ad = {
+        template: template,
+        condition: condition,
+        mileage: mileage,
+        askingPrice: askingPrice,
+        hiddenIssues: hiddenIssues,
+        sellerName: SELLER_NAMES[rand(0, SELLER_NAMES.length - 1)],
+        sellerFirmness: rand(30, 90), // How hard they are to negotiate with
+        inspected: false,
+      };
+
+      this.classifiedAds.push(ad);
+    }
+  }
+
+  // ---- PARTS GENERATION ----
+  generateAvailableParts() {
+    this.availableParts = [];
+    for (let i = 0; i < PARTS_DATA.length; i++) {
+      const p = PARTS_DATA[i];
+      // Randomize price slightly
+      const costVariance = rand(-50, 100);
+      this.availableParts.push({
+        ...p,
+        cost: Math.max(100, p.baseCost + costVariance),
+      });
+    }
+  }
+
+  // ---- SET MESSAGE ----
+  showMessage(msg, duration) {
+    this.message = msg;
+    this.messageTimer = duration || 120; // frames
+  }
+
+  // ---- BUY CAR ----
+  buyCar(ad, price) {
+    if (this.cash < price) {
+      this.audio.play('error');
+      this.showMessage('Not enough cash!', 90);
+      return false;
+    }
+
+    this.cash -= price;
+    const car = new Car(ad.template, ad.condition);
+
+    // Apply hidden issues as condition penalties
+    if (ad.hiddenIssues.length > 0) {
+      car.condition = Math.max(10, car.condition - ad.hiddenIssues.length * 8);
+      car.reliability = Math.max(5, car.reliability - ad.hiddenIssues.length * 10);
+    }
+
+    this.currentCar = car;
+    this.carsOwned++;
+    this.day += rand(1, 3);
+
+    // Remove bought ad and regenerate classifieds
+    this.classifiedAds = this.classifiedAds.filter(a => a !== ad);
+    if (this.classifiedAds.length < 4) {
+      this.generateClassifieds();
+    }
+
+    this.audio.play('cash');
+    this.showMessage(`Bought ${car.year} ${car.name} for $${price}!`, 120);
+    this.screen = 'garage';
+    return true;
+  }
+
+  // ---- NEGOTIATE ----
+  negotiate(ad, offer) {
+    if (offer > this.cash) {
+      this.audio.play('error');
+      this.showMessage("You don't have that much cash!", 90);
+      return false;
+    }
+
+    if (offer <= 0) {
+      this.audio.play('error');
+      this.showMessage("That's not a real offer!", 90);
+      return false;
+    }
+
+    const ratio = offer / ad.askingPrice;
+    let acceptChance = 0;
+
+    if (ratio >= 1.0) {
+      // At or above asking - always accepted
+      acceptChance = 1.0;
+    } else if (ratio >= 0.9) {
+      // 90-100% of asking - likely accepted unless seller is very firm
+      acceptChance = 0.7 + (1 - ad.sellerFirmness / 100) * 0.3;
+    } else if (ratio >= 0.75) {
+      // 75-90% - moderate chance, depends on firmness
+      acceptChance = (1 - ad.sellerFirmness / 100) * 0.6;
+    } else if (ratio >= 0.5) {
+      // 50-75% - low chance, only if seller is easygoing
+      acceptChance = (1 - ad.sellerFirmness / 100) * 0.25;
+    } else {
+      // Below 50% - insult offer, very unlikely
+      acceptChance = (1 - ad.sellerFirmness / 100) * 0.05;
+    }
+
+    if (Math.random() < acceptChance) {
+      this.audio.play('cash');
+      this.showMessage(`${ad.sellerName} accepts $${offer}!`, 120);
+      return this.buyCar(ad, offer);
+    } else {
+      // Seller counters or rejects
+      if (ratio >= 0.7) {
+        const counter = Math.round(ad.askingPrice * (0.85 + ad.sellerFirmness / 200));
+        this.audio.play('blip');
+        this.showMessage(`${ad.sellerName} says: "How about $${counter}?"`, 120);
+        // Store counter offer for display
+        ad.counterOffer = counter;
+      } else {
+        this.audio.play('error');
+        this.showMessage(`${ad.sellerName} says: "That's an insult! Walk away."`, 120);
+      }
+      return false;
+    }
+  }
+
+  // ---- INSTALL PART ----
+  installPart(partIdx) {
+    if (partIdx < 0 || partIdx >= this.availableParts.length) return;
+    const part = this.availableParts[partIdx];
+
+    if (!this.currentCar) {
+      this.showMessage('You need a car first!', 90);
+      return;
+    }
+
+    if (this.currentCar.parts[part.id]) {
+      this.showMessage('Already installed!', 90);
+      return;
+    }
+
+    if (this.cash < part.cost) {
+      this.audio.play('error');
+      this.showMessage("Can't afford that part!", 90);
+      return;
+    }
+
+    this.cash -= part.cost;
+    this.currentCar.addPart(part);
+    this.day += rand(1, 2);
+
+    // Remove from available parts (or regenerate)
+    this.availableParts.splice(partIdx, 1);
+    if (this.availableParts.length < 3) {
+      this.generateAvailableParts();
+    }
+
+    this.audio.play('wrench');
+    this.showMessage(`Installed ${part.name}!`, 120);
+  }
+
+  // ---- TUNE CAR ----
+  tuneCar() {
+    if (!this.currentCar) return;
+
+    const cost = rand(50, 150);
+    if (this.cash < cost) {
+      this.audio.play('error');
+      this.showMessage(`Need $${cost} to tune!`, 90);
+      return;
+    }
+
+    this.cash -= cost;
+    const hpGain = rand(2, 8);
+    this.currentCar.horsepower += hpGain;
+    this.day++;
+
+    this.audio.play('wrench');
+    this.showMessage(`Tuned! +${hpGain} HP`, 120);
+  }
+
+  // ---- REPAIR CAR ----
+  repairCar() {
+    if (!this.currentCar) return;
+
+    const cost = this.currentCar.getRepairCost();
+    if (this.cash < cost) {
+      this.audio.play('error');
+      this.showMessage(`Need $${cost} to repair!`, 90);
+      return;
+    }
+
+    this.cash -= cost;
+    const oldCond = this.currentCar.condition;
+    this.currentCar.condition = Math.min(100, this.currentCar.condition + rand(20, 40));
+    this.currentCar.reliability = Math.min(100, this.currentCar.reliability + rand(5, 15));
+    this.day += rand(1, 3);
+
+    this.audio.play('wrench');
+    this.showMessage(`Repaired! Condition: ${oldCond}% -> ${this.currentCar.condition}%`, 120);
+  }
+
+  // ---- SELL CAR ----
+  sellCar() {
+    if (!this.currentCar) return;
+
+    const price = this.currentCar.getSellPrice();
+    this.cash += price;
+    this.day++;
+
+    this.audio.play('cash');
+    this.showMessage(`Sold for $${price}!`, 120);
+
+    // Reset to a basic starter car
+    const starterTemplate = CAR_TEMPLATES[3];
+    this.currentCar = new Car(starterTemplate, 50);
+  }
+
+  // ---- START RACE ----
+  startRace(raceIdx) {
+    if (!this.currentCar) {
+      this.showMessage('You need a car to race!', 90);
+      return;
+    }
+
+    this.selectedRace = raceIdx;
+    this.racePhase = 'countdown';
+    this.raceTimer = 180; // 3 seconds
+    this.playerProgress = 0;
+    this.opponentProgress = 0;
+    this.raceResult = '';
+    this.screen = 'racing';
+
+    this.audio.play('countdown');
+  }
+
+  // ---- UPDATE RACE ----
+  updateRace() {
+    if (this.racePhase === 'countdown') {
+      this.raceTimer--;
+
+      // Play countdown beeps
+      if (this.raceTimer === 120) this.audio.play('countdown');
+      if (this.raceTimer === 60) this.audio.play('countdown');
+      if (this.raceTimer === 1) {
+        this.audio.play('go');
+      }
+
+      if (this.raceTimer <= 0) {
+        this.racePhase = 'racing';
+      }
+    } else if (this.racePhase === 'racing') {
+      const race = RACES[this.selectedRace];
+
+      // Calculate player speed based on car performance
+      const perf = this.currentCar.getPerformanceRating();
+      const baseSpeed = 0.001 + (perf / 500) * 0.003;
+      const playerSpeed = baseSpeed + (Math.random() - 0.5) * 0.001;
+
+      // Opponent speed based on race difficulty
+      const oppBaseSpeed = 0.001 + (race.difficulty / 6) * 0.003;
+      const oppSpeed = oppBaseSpeed + (Math.random() - 0.5) * 0.001;
+
+      this.playerProgress = Math.min(1, this.playerProgress + playerSpeed);
+      this.opponentProgress = Math.min(1, this.opponentProgress + oppSpeed);
+
+      // Check for breakdown
+      if (Math.random() < (1 - this.currentCar.reliability / 100) * 0.002) {
+        this.racePhase = 'finished';
+        this.raceResult = 'breakdown';
+        this.reputation = Math.max(0, this.reputation - 2);
+        this.day += rand(3, 7);
+        this.audio.play('lose');
+        return;
+      }
+
+      // Check finish
+      if (this.playerProgress >= 1 || this.opponentProgress >= 1) {
+        this.racePhase = 'finished';
+
+        if (this.playerProgress >= 1 && this.playerProgress > this.opponentProgress) {
+          this.raceResult = 'win';
+          const prize = Math.round(race.purse * (0.8 + Math.random() * 0.4));
+          this.cash += prize;
+          this.reputation += race.difficulty * 2;
+          this.racesWon++;
+          this.day += rand(1, 3);
+          this.audio.play('win');
+        } else {
+          this.raceResult = 'lose';
+          const consolation = Math.round(race.purse * 0.1);
+          this.cash += consolation;
+          this.day++;
+          this.audio.play('lose');
+        }
+      }
+
+      // Engine sound during race
+      if (this.frameCount % 15 === 0) {
+        this.audio.play('engine');
+      }
+    } else if (this.racePhase === 'finished') {
+      // Wait for click to continue
+    }
+  }
+
+  // ---- SAVE / LOAD ----
+  saveGame() {
+    const data = {
+      cash: this.cash,
+      reputation: this.reputation,
+      carsOwned: this.carsOwned,
+      racesWon: this.racesWon,
+      day: this.day,
+      currentCar: this.currentCar ? {
+        name: this.currentCar.name,
+        year: this.currentCar.year,
+        horsepower: this.currentCar.horsepower,
+        weight: this.currentCar.weight,
+        grip: this.currentCar.grip,
+        reliability: this.currentCar.reliability,
+        baseValue: this.currentCar.baseValue,
+        colorIdx: this.currentCar.colorIdx,
+        bodyStyle: this.currentCar.bodyStyle,
+        condition: this.currentCar.condition,
+        parts: this.currentCar.parts,
+      } : null,
+    };
+
+    localStorage.setItem('streetGarage89', JSON.stringify(data));
+    this.audio.play('cash');
+    this.showMessage('Game saved!', 90);
+  }
+
+  loadGame() {
+    const raw = localStorage.getItem('streetGarage89');
+    if (!raw) {
+      this.audio.play('error');
+      this.showMessage('No save found!', 90);
+      return;
+    }
+
+    try {
+      const data = JSON.parse(raw);
+      this.cash = data.cash || 3500;
+      this.reputation = data.reputation || 0;
+      this.carsOwned = data.carsOwned || 1;
+      this.racesWon = data.racesWon || 0;
+      this.day = data.day || 1;
+
+      if (data.currentCar) {
+        const cd = data.currentCar;
+        this.currentCar = new Car(CAR_TEMPLATES[0], cd.condition);
+        Object.assign(this.currentCar, cd);
+      }
+
+      this.audio.play('cash');
+      this.showMessage('Game loaded!', 90);
+      this.screen = 'garage';
+    } catch(e) {
+      this.audio.play('error');
+      this.showMessage('Failed to load save!', 90);
+    }
+  }
+
+  // ---- KEYBOARD HANDLING ----
+  handleKeyboard() {
+    if (this.input.isKeyDown('c') && this.screen !== 'classifieds' && this.screen !== 'inspect') {
+      this.audio.play('select');
+      this.screen = 'classifieds';
+    }
+    if (this.input.isKeyDown('g') && this.screen !== 'garage') {
+      this.audio.play('select');
+      this.screen = 'garage';
+    }
+    if (this.input.isKeyDown('p') && this.screen !== 'partsShop' && this.screen !== 'install') {
+      this.audio.play('select');
+      this.screen = 'partsShop';
+    }
+    if (this.input.isKeyDown('r') && this.screen !== 'raceSelect' && this.screen !== 'racing' && this.screen !== 'results') {
+      this.audio.play('select');
+      this.screen = 'raceSelect';
+    }
+    if (this.input.isKeyDown('s')) {
+      this.audio.play('select');
+      this.screen = 'saveScreen';
+    }
+    if (this.input.isKeyDown('l')) {
+      this.audio.play('select');
+      this.screen = 'loadScreen';
+    }
+    if (this.input.isKeyDown('m')) {
+      const muted = this.audio.toggleMute();
+      this.showMessage(muted ? 'Audio Muted' : 'Audio On', 60);
+    }
+    if (this.input.isKeyDown('escape')) {
+      this.audio.play('blip');
+      if (this.screen === 'inspect') this.screen = 'classifieds';
+      else if (this.screen === 'install') this.screen = 'partsShop';
+      else if (this.screen === 'tune' || this.screen === 'sellCar') this.screen = 'garage';
+      else if (this.screen === 'saveScreen' || this.screen === 'loadScreen') this.screen = 'garage';
+      else if (this.screen !== 'title' && this.screen !== 'racing') this.screen = 'garage';
+    }
+
+    // Consume keys to prevent repeat
+    if (this.input.isKeyDown('c')) this.input.keys['c'] = false;
+    if (this.input.isKeyDown('g')) this.input.keys['g'] = false;
+    if (this.input.isKeyDown('p')) this.input.keys['p'] = false;
+    if (this.input.isKeyDown('r')) this.input.keys['r'] = false;
+    if (this.input.isKeyDown('s')) this.input.keys['s'] = false;
+    if (this.input.isKeyDown('l')) this.input.keys['l'] = false;
+    if (this.input.isKeyDown('m')) this.input.keys['m'] = false;
+  }
+
+  // ---- CLICK HANDLING ----
+  handleClick() {
+    const mx = this.input.mouseX;
+    const my = this.input.mouseY;
+
+    switch (this.screen) {
+      case 'title':
+        this.audio.play('select');
+        this.screen = 'garage';
+        break;
+
+      case 'saveScreen':
+        if (mx >= 100 && mx <= 220 && my >= 115 && my <= 135) {
+          this.saveGame();
+          this.screen = 'garage';
+        }
+        break;
+
+      case 'loadScreen':
+        if (mx >= 100 && mx <= 220 && my >= 115 && my <= 135) {
+          this.loadGame();
+        }
+        break;
+
+      case 'garage':
+        // Classifieds button
+        if (mx >= 5 && mx <= 70 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'classifieds';
+        }
+        // Parts button
+        if (mx >= 75 && mx <= 140 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'partsShop';
+        }
+        // Race button
+        if (mx >= 145 && mx <= 200 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'raceSelect';
+        }
+        // Tune button
+        if (mx >= 205 && mx <= 260 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'tune';
+        }
+        // Sell button
+        if (mx >= 265 && mx <= 315 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'sellCar';
+        }
+        break;
+
+      case 'classifieds':
+        // Check ad clicks
+        for (let i = 0; i < this.classifiedAds.length; i++) {
+          const ly = 25 + i * 18;
+          if (mx >= 5 && mx <= W - 10 && my >= ly && my <= ly + 16) {
+            this.audio.play('select');
+            this.selectedAd = i;
+            this.screen = 'inspect';
+            return;
+          }
+        }
+        // Back button
+        if (mx >= 5 && mx <= 40 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'garage';
+        }
+        break;
+
+      case 'inspect': {
+        const ad = this.classifiedAds[this.selectedAd];
+        if (!ad) { this.screen = 'classifieds'; return; }
+
+        // Inspect button
+        if (mx >= 5 && mx <= 60 && my >= 182 && my <= 196) {
+          this.audio.play('blip');
+          ad.inspected = true;
+        }
+
+        // Offer button - opens offer input mode
+        if (mx >= 70 && mx <= 130 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          // Auto-offer at 80% of asking price
+          const offer = Math.round(ad.askingPrice * 0.8);
+          this.negotiate(ad, offer);
+        }
+
+        // Buy at asking price button
+        if (mx >= 140 && mx <= 210 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.buyCar(ad, ad.askingPrice);
+        }
+
+        // Walk away button
+        if (mx >= 220 && mx <= 315 && my >= 182 && my <= 196) {
+          this.audio.play('blip');
+          this.screen = 'classifieds';
+        }
+
+        // Custom offer buttons (if counter offer exists)
+        if (ad.counterOffer) {
+          // Accept counter
+          if (mx >= 5 && mx <= 80 && my >= 168 && my <= 180) {
+            this.audio.play('select');
+            this.negotiate(ad, ad.counterOffer);
+          }
+          // Counter back (85% of counter)
+          if (mx >= 90 && mx <= 170 && my >= 168 && my <= 180) {
+            this.audio.play('select');
+            const counterBack = Math.round(ad.counterOffer * 0.85);
+            this.negotiate(ad, counterBack);
+          }
+        }
+        break;
+      }
+
+      case 'partsShop':
+        // Check part clicks
+        for (let i = 0; i < this.availableParts.length; i++) {
+          const ly = 25 + i * 16;
+          if (mx >= 5 && mx <= W - 10 && my >= ly && my <= ly + 14) {
+            this.audio.play('select');
+            this.selectedPartIdx = i;
+            this.screen = 'install';
+            return;
+          }
+        }
+        // Back button
+        if (mx >= 5 && mx <= 40 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'garage';
+        }
+        break;
+
+      case 'install': {
+        const part = this.availableParts[this.selectedPartIdx];
+        if (!part) { this.screen = 'partsShop'; return; }
+
+        // Install button
+        if (mx >= 5 && mx <= 70 && my >= 182 && my <= 196) {
+          this.installPart(this.selectedPartIdx);
+        }
+        // Cancel button
+        if (mx >= 80 && mx <= 150 && my >= 182 && my <= 196) {
+          this.audio.play('blip');
+          this.screen = 'partsShop';
+        }
+        break;
+      }
+
+      case 'tune':
+        // Tune button
+        if (mx >= 5 && mx <= 70 && my >= 182 && my <= 196) {
+          this.tuneCar();
+        }
+        // Repair button
+        if (mx >= 80 && mx <= 150 && my >= 182 && my <= 196) {
+          this.repairCar();
+        }
+        // Back button
+        if (mx >= 160 && mx <= 220 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'garage';
+        }
+        break;
+
+      case 'sellCar':
+        // Confirm sell
+        if (mx >= 5 && mx <= 80 && my >= 182 && my <= 196) {
+          this.sellCar();
+        }
+        // Cancel
+        if (mx >= 90 && mx <= 160 && my >= 182 && my <= 196) {
+          this.audio.play('blip');
+          this.screen = 'garage';
+        }
+        break;
+
+      case 'raceSelect':
+        // Check race clicks
+        for (let i = 0; i < RACES.length; i++) {
+          const race = RACES[i];
+          const ly = 50 + i * 20;
+          if (mx >= 5 && mx <= W - 10 && my >= ly && my <= ly + 18) {
+            if (this.reputation >= race.minRep) {
+              this.audio.play('select');
+              this.startRace(i);
+            } else {
+              this.audio.play('error');
+              this.showMessage(`Need ${race.minRep} reputation!`, 90);
+            }
+          }
+        }
+        // Back button
+        if (mx >= 5 && mx <= 40 && my >= 182 && my <= 196) {
+          this.audio.play('select');
+          this.screen = 'garage';
+        }
+        break;
+
+      case 'racing':
+        if (this.racePhase === 'finished') {
+          this.screen = 'results';
+        }
+        break;
+
+      case 'results':
+        this.screen = 'garage';
+        break;
+    }
+  }
+
+  // ---- UPDATE ----
+  update() {
+    this.frameCount++;
+
+    // Handle keyboard
+    this.handleKeyboard();
+
+    // Handle clicks
+    if (this.input.consumeClick()) {
+      this.handleClick();
+    }
+
+    // Update message timer
+    if (this.messageTimer > 0) {
+      this.messageTimer--;
+      if (this.messageTimer <= 0) {
+        this.message = '';
+      }
+    }
+
+    // Update race if in racing screen
+    if (this.screen === 'racing') {
+      this.updateRace();
+    }
+
+    // Regenerate classifieds periodically
+    if (this.screen === 'classifieds' && this.frameCount % 600 === 0) {
+      if (this.classifiedAds.length < 4) {
+        this.generateClassifieds();
+      }
+    }
+  }
+
+  // ---- RENDER ----
+  render() {
+    switch (this.screen) {
+      case 'title': this.renderTitle(); break;
+      case 'garage': this.renderGarage(); break;
+      case 'classifieds': this.renderClassifieds(); break;
+      case 'inspect': this.renderInspect(); break;
+      case 'partsShop': this.renderPartsShop(); break;
+      case 'install': this.renderInstall(); break;
+      case 'tune': this.renderTune(); break;
+      case 'sellCar': this.renderSellCar(); break;
+      case 'raceSelect': this.renderRaceSelect(); break;
+      case 'racing': this.renderRacing(); break;
+      case 'results': this.renderResults(); break;
+      case 'saveScreen': this.renderer.drawSaveLoadScreen('save'); break;
+      case 'loadScreen': this.renderer.drawSaveLoadScreen('load'); break;
+    }
+
+    // Always draw message overlay and muted indicator
+    this.renderer.drawMessage(this.message);
+    this.renderer.drawMutedIndicator(this.audio.muted);
+  }
+
+  // ---- TITLE SCREEN RENDERER ----
+  renderTitle() {
+    this.renderer.drawTitleScreen();
+  }
+
+  // ---- GARAGE SCREEN RENDERER ----
+  renderGarage() {
+    this.renderer.clear(C.bg);
+
+    // Draw garage scene background
+    this.renderer.drawGarageScene();
+
+    // Draw current car in center of garage
+    if (this.currentCar) {
+      this.renderer.drawCar(100, 95, this.currentCar.colorIdx, this.currentCar.bodyStyle);
+    } else {
+      this.renderer.textCentered('No car in garage', W / 2, 105, C.red);
+    }
+
+    // Top info bar
+    this.renderer.panel(0, 0, W, 18, C.panelBg, C.panelBorder);
+    this.renderer.text(`Day ${this.day}`, 5, 12, C.lightGray);
+    this.renderer.text(`REP: ${this.reputation}`, 60, 12, C.yellow);
+    this.renderer.text(`Cash: $${this.cash}`, 130, 12, C.green);
+
+    // Car info panel (right side)
+    if (this.currentCar) {
+      this.renderer.panel(W - 105, 22, 100, 75, C.panelBg, C.panelBorder);
+      this.renderer.text(`${this.currentCar.year} ${this.currentCar.name}`, W - 100, 32, C.yellow);
+      this.renderer.text(`HP: ${this.currentCar.horsepower}`, W - 100, 42, C.text);
+      this.renderer.text(`WGT: ${this.currentCar.weight}`, W - 100, 52, C.text);
+      this.renderer.text(`GRIP: ${this.currentCar.grip}`, W - 100, 62, C.text);
+      this.renderer.text(`REL: ${this.currentCar.reliability}%`, W - 100, 72, C.text);
+      this.renderer.text(`COND: ${this.currentCar.condition}%`, W - 100, 82, C.text);
+      this.renderer.text(`VAL: $${this.currentCar.getValue()}`, W - 100, 92, C.green);
+      this.renderer.text(`PERF: ${this.currentCar.getPerformanceRating()}`, W - 100, 102, C.orange);
+    }
+
+    // Bottom buttons
+    const btnY = 182;
+    this.renderer.button(5, btnY, 65, 14, 'CLASSIFIEDS',
+      this.input.mouseX >= 5 && this.input.mouseX <= 70 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    this.renderer.button(75, btnY, 65, 14, 'PARTS',
+      this.input.mouseX >= 75 && this.input.mouseX <= 140 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    this.renderer.button(145, btnY, 55, 14, 'RACES',
+      this.input.mouseX >= 145 && this.input.mouseX <= 200 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    this.renderer.button(205, btnY, 55, 14, 'TUNE',
+      this.input.mouseX >= 205 && this.input.mouseX <= 260 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    this.renderer.button(265, btnY, 50, 14, 'SELL',
+      this.input.mouseX >= 265 && this.input.mouseX <= 315 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    // Keyboard hints
+    this.renderer.text('C G P R S L M', 105, btnY - 2, C.darkGray);
+  }
+
+  // ---- CLASSIFIEDS SCREEN RENDERER ----
+  renderClassifieds() {
+    this.renderer.clear(C.darkBg);
+
+    // Newspaper header
+    this.renderer.drawNewspaperHeader();
+
+    // Cash display - top right, clearly visible
+    this.renderer.text(`Cash: $${this.cash}`, W - 80, 24, C.green);
+
+    // Ad listings
+    const startY = 25;
+    for (let i = 0; i < this.classifiedAds.length; i++) {
+      const ad = this.classifiedAds[i];
+      const ly = startY + i * 18;
+
+      if (ly > H - 30) break; // Don't draw off-screen ads
+
+      const hover = this.input.mouseX >= 5 && this.input.mouseX <= W - 10 &&
+                    this.input.mouseY >= ly && this.input.mouseY <= ly + 16;
+
+      if (hover) {
+        this.renderer.rect(5, ly, W - 10, 16, '#2a2a3e');
+      }
+
+      // Ad text: Year Name - Price - Condition%
+      const nameStr = `${ad.template.year} ${ad.template.name}`;
+      this.renderer.text(nameStr, 8, ly + 2, hover ? C.white : C.lightGray);
+
+      // Asking price - ensure it displays correctly
+      const price = ad.askingPrice || 0;
+      this.renderer.text(`$${price}`, W - 55, ly + 2, hover ? C.yellow : C.green);
+
+      // Condition indicator
+      const condColor = ad.condition > 70 ? C.green : (ad.condition > 40 ? C.orange : C.red);
+      this.renderer.text(`${ad.condition}%`, W - 55, ly + 12, condColor);
+
+      // Seller name
+      this.renderer.text(ad.sellerName, 8, ly + 12, C.darkGray);
+
+      // Inspected indicator
+      if (ad.inspected) {
+        this.renderer.text('[INSPECTED]', 100, ly + 2, C.cyan);
+      }
+
+      // Hidden issues hint (if inspected)
+      if (ad.inspected && ad.hiddenIssues.length > 0) {
+        this.renderer.text(`⚠ ${ad.hiddenIssues[0]}`, 100, ly + 12, C.red);
+      }
+
+      // Hover tooltip
+      if (hover) {
+        this.renderer.drawTooltip(this.input.mouseX, ly - 10, `Click to inspect`);
+      }
+    }
+
+    // Back button
+    this.renderer.button(5, 182, 35, 14, 'BACK',
+      this.input.mouseX >= 5 && this.input.mouseX <= 40 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+
+    // Ad count
+    this.renderer.text(`${this.classifiedAds.length} ads`, W - 50, 184, C.darkGray);
+  }
+
+  // ---- INSPECT SCREEN RENDERER ----
+  renderInspect() {
+    this.renderer.clear(C.darkBg);
+
+    if (this.selectedAd < 0 || !this.classifiedAds[this.selectedAd]) {
+      this.renderer.text('No car selected', 105, 30, C.red);
+      this.renderer.button(5, 182, 40, 14, 'BACK',
+        this.input.mouseX >= 5 && this.input.mouseX <= 44 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+      return;
+    }
+
+    const ad = this.classifiedAds[this.selectedAd];
+
+    // Header
+    this.renderer.panel(0, 0, W, 18, C.panelBg, C.panelBorder);
+    this.renderer.textCentered('CAR INSPECTION', W / 2, 10, C.yellow);
+
+    // Car drawing
+    this.renderer.drawCar(80, 35, ad.template.colorIdx, ad.template.bodyStyle);
+
+    // Car details panel
+    this.renderer.panel(5, 60, W - 10, 80, C.panelBg, C.panelBorder);
+
+    this.renderer.text(`${ad.template.year} ${ad.template.name}`, 10, 68, C.yellow);
+    this.renderer.text(`Seller: ${ad.sellerName}`, 10, 78, C.lightGray);
+    this.renderer.text(`Mileage: ${ad.mileage.toLocaleString()} mi`, 10, 88, C.lightGray);
+    this.renderer.text(`Condition: ${ad.condition}%`, 10, 98, ad.condition > 60 ? C.green : C.orange);
+    this.renderer.text(`HP: ${Math.round(ad.template.horsepower * ad.condition / 100)}`, 10, 108, C.text);
+    this.renderer.text(`Weight: ${ad.template.weight} lbs`, 10, 118, C.text);
+    this.renderer.text(`Grip: ${ad.template.grip}`, 10, 128, C.text);
+    this.renderer.text(`Reliability: ${Math.round(ad.template.reliability * ad.condition / 100)}%`, 10, 138, C.text);
+
+    // Asking price - clearly displayed
+    const askingPrice = ad.askingPrice || 0;
+    this.renderer.text(`Asking Price: $${askingPrice}`, W - 100, 68, C.yellow);
+
+    // Seller firmness indicator
+    const firmLabel = ad.sellerFirmness > 70 ? 'Very Firm' : (ad.sellerFirmness > 45 ? 'Moderate' : 'Easygoing');
+    this.renderer.text(`Negotiation: ${firmLabel}`, W - 100, 78, ad.sellerFirmness > 60 ? C.red : C.green);
+
+    // Hidden issues (if inspected)
+    if (ad.inspected && ad.hiddenIssues.length > 0) {
+      this.renderer.text('KNOWN ISSUES:', 10, 148, C.red);
+      for (let j = 0; j < ad.hiddenIssues.length; j++) {
+        this.renderer.text(`- ${ad.hiddenIssues[j]}`, 15, 158 + j * 10, C.orange);
+      }
+    }
+
+    // Counter offer display
+    if (ad.counterOffer) {
+      this.renderer.panel(5, 162, W - 10, 18, '#2a1a1a', C.red);
+      this.renderer.text(`${ad.sellerName} offers: $${ad.counterOffer}`, 10, 172, C.yellow);
+    }
+
+    // Buttons at bottom
+    const btnY = 182;
+
+    // Inspect button (reveals hidden issues)
+    const inspectHover = this.input.mouseX >= 5 && this.input.mouseX <= 60 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14;
+    this.renderer.button(5, btnY, 55, 14, ad.inspected ? 'INSPECTED' : 'INSPECT', inspectHover);
+
+    // Offer button (80% of asking)
+    const offerAmount = Math.round(askingPrice * 0.8);
+    const offerHover = this.input.mouseX >= 70 && this.input.mouseX <= 130 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14;
+    this.renderer.button(70, btnY, 60, 14, `OFFER $${offerAmount}`, offerHover);
+
+    // Buy at asking price
+    const buyHover = this.input.mouseX >= 140 && this.input.mouseX <= 210 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14;
+    this.renderer.button(140, btnY, 70, 14, `BUY $${askingPrice}`, buyHover);
+
+    // Walk away
+    const walkHover = this.input.mouseX >= 220 && this.input.mouseX <= 315 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14;
+    this.renderer.button(220, btnY, 95, 14, 'WALK AWAY', walkHover);
+
+    // Cash reminder
+    this.renderer.text(`Your cash: $${this.cash}`, 5, btnY - 2, C.green);
+  }
+
+  // ---- PARTS SHOP SCREEN RENDERER ----
+  renderPartsShop() {
+    this.renderer.clear(C.darkBg);
+
+    // Header
+    this.renderer.drawPartsShopHeader();
+
+    // Cash display
+    this.renderer.text(`Cash: $${this.cash}`, W - 70, 24, C.green);
+
+    // Parts list
+    const startY = 25;
+    for (let i = 0; i < this.availableParts.length; i++) {
+      const part = this.availableParts[i];
+      const ly = startY + i * 16;
+
+      if (ly > H - 30) break;
+
+      const hover = this.input.mouseX >= 5 && this.input.mouseX <= W - 10 &&
+                    this.input.mouseY >= ly && this.input.mouseY <= ly + 14;
+
+      if (hover) {
+        this.renderer.rect(5, ly, W - 10, 14, '#2a2a3e');
+      }
+
+      // Check if already installed
+      const installed = this.currentCar && this.currentCar.parts[part.id];
+
+      if (installed) {
+        this.renderer.text(`✓ ${part.name}`, 8, ly + 2, C.green);
+        this.renderer.text(`INSTALLED`, W - 65, ly + 2, C.darkGray);
+      } else {
+        this.renderer.text(part.name, 8, ly + 2, hover ? C.white : C.lightGray);
+        this.renderer.text(`$${part.cost}`, W - 50, ly + 2, hover ? C.yellow : C.green);
+
+        // Stats preview
+        let stats = '';
+        if (part.hpBonus) stats += `+${part.hpBonus}HP `;
+        if (part.gripBonus) stats += `+${part.gripBonus}GRIP `;
+        if (part.relBonus) stats += `+${part.relBonus}REL `;
+        if (part.weightBonus) stats += `${part.weightBonus}WGT`;
+        this.renderer.text(stats, 8, ly + 12, C.darkGray);
+      }
+
+      if (hover && !installed) {
+        this.renderer.drawTooltip(this.input.mouseX, ly - 10, `Click to install`);
+      }
+    }
+
+    // Back button
+    this.renderer.button(5, 182, 35, 14, 'BACK',
+      this.input.mouseX >= 5 && this.input.mouseX <= 40 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+  }
+
+  // ---- INSTALL SCREEN RENDERER ----
+  renderInstall() {
+    this.renderer.clear(C.darkBg);
+
+    // Header
+    this.renderer.drawInstallHeader();
+
+    if (this.selectedPartIdx < 0 || !this.availableParts[this.selectedPartIdx]) {
+      this.renderer.text('No part selected', 105, 30, C.red);
+      this.renderer.button(80, 182, 70, 14, 'CANCEL',
+        this.input.mouseX >= 80 && this.input.mouseX <= 150 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+      return;
+    }
+
+    const part = this.availableParts[this.selectedPartIdx];
+
+    // Part details
+    this.renderer.panel(20, 25, W - 40, 60, C.panelBg, C.panelBorder);
+    this.renderer.textCentered(part.name, W / 2, 35, C.yellow);
+    this.renderer.textCentered(`Cost: $${part.cost}`, W / 2, 50, C.green);
+
+    // Stats
+    let stats = [];
+    if (part.hpBonus) stats.push(`+${part.hpBonus} Horsepower`);
+    if (part.gripBonus) stats.push(`+${part.gripBonus} Grip`);
+    if (part.relBonus) stats.push(`+${part.relBonus} Reliability`);
+    if (part.relPenalty) stats.push(`${part.relPenalty} Reliability`);
+    if (part.weightBonus) stats.push(`${part.weightBonus > 0 ? '+' : ''}${part.weightBonus} Weight`);
+
+    for (let i = 0; i < stats.length; i++) {
+      this.renderer.textCentered(stats[i], W / 2, 65 + i * 10, C.text);
+    }
+
+    // Car preview with part effect
+    if (this.currentCar) {
+      this.renderer.drawCar(100, 105, this.currentCar.colorIdx, this.currentCar.bodyStyle);
+    }
+
+    // Buttons
+    const btnY = 182;
+    this.renderer.button(5, btnY, 65, 14, 'INSTALL',
+      this.input.mouseX >= 5 && this.input.mouseX <= 70 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    this.renderer.button(80, btnY, 70, 14, 'CANCEL',
+      this.input.mouseX >= 80 && this.input.mouseX <= 150 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    // Cash reminder
+    this.renderer.text(`Cash: $${this.cash}`, 160, btnY + 2, C.green);
+  }
+
+  // ---- TUNE SCREEN RENDERER ----
+  renderTune() {
+    this.renderer.clear(C.darkBg);
+
+    // Header
+    this.renderer.drawTuneHeader();
+
+    if (!this.currentCar) {
+      this.renderer.text('No car to tune!', 105, 30, C.red);
+      this.renderer.button(160, 182, 60, 14, 'BACK',
+        this.input.mouseX >= 160 && this.input.mouseX <= 220 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+      return;
+    }
+
+    // Car drawing
+    this.renderer.drawCar(100, 35, this.currentCar.colorIdx, this.currentCar.bodyStyle);
+
+    // Stats panel
+    this.renderer.panel(20, 75, W - 40, 60, C.panelBg, C.panelBorder);
+    this.renderer.textCentered(`${this.currentCar.year} ${this.currentCar.name}`, W / 2, 83, C.yellow);
+    this.renderer.text(`HP: ${this.currentCar.horsepower}`, 30, 95, C.text);
+    this.renderer.text(`WGT: ${this.currentCar.weight}`, 30, 105, C.text);
+    this.renderer.text(`GRIP: ${this.currentCar.grip}`, 30, 115, C.text);
+    this.renderer.text(`REL: ${this.currentCar.reliability}%`, 30, 125, C.text);
+    this.renderer.text(`COND: ${this.currentCar.condition}%`, 160, 95, C.text);
+    this.renderer.text(`PERF: ${this.currentCar.getPerformanceRating()}`, 160, 105, C.orange);
+    this.renderer.text(`VAL: $${this.currentCar.getValue()}`, 160, 115, C.green);
+
+    // Installed parts
+    const partKeys = Object.keys(this.currentCar.parts || {});
+    if (partKeys.length > 0) {
+      this.renderer.text('INSTALLED:', 30, 140, C.accent);
+      for (let i = 0; i < partKeys.length && i < 4; i++) {
+        this.renderer.text(`- ${this.currentCar.parts[partKeys[i]].name}`, 35, 150 + i * 10, C.lightGray);
+      }
+    }
+
+    // Buttons
+    const btnY = 182;
+    this.renderer.button(5, btnY, 65, 14, 'TUNE',
+      this.input.mouseX >= 5 && this.input.mouseX <= 70 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    const repairCost = this.currentCar.getRepairCost();
+    this.renderer.button(80, btnY, 70, 14, `REPAIR $${repairCost}`,
+      this.input.mouseX >= 80 && this.input.mouseX <= 150 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    this.renderer.button(160, btnY, 60, 14, 'BACK',
+      this.input.mouseX >= 160 && this.input.mouseX <= 220 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    // Cash
+    this.renderer.text(`Cash: $${this.cash}`, 230, btnY + 2, C.green);
+  }
+
+  // ---- SELL CAR SCREEN RENDERER ----
+  renderSellCar() {
+    this.renderer.clear(C.darkBg);
+
+    // Header
+    this.renderer.drawSellHeader();
+
+    if (!this.currentCar) {
+      this.renderer.text('No car to sell!', 105, 30, C.red);
+      this.renderer.button(90, 182, 70, 14, 'CANCEL',
+        this.input.mouseX >= 90 && this.input.mouseX <= 160 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+      return;
+    }
+
+    // Car drawing
+    this.renderer.drawCar(100, 35, this.currentCar.colorIdx, this.currentCar.bodyStyle);
+
+    // Sell info
+    const sellPrice = this.currentCar.getSellPrice();
+    this.renderer.panel(20, 85, W - 40, 50, C.panelBg, C.panelBorder);
+    this.renderer.textCentered(`${this.currentCar.year} ${this.currentCar.name}`, W / 2, 93, C.yellow);
+    this.renderer.textCentered(`Estimated Sell Price: $${sellPrice}`, W / 2, 108, C.green);
+    this.renderer.textCentered(`(70-90% of value)`, W / 2, 120, C.lightGray);
+    this.renderer.textCentered(`Current Value: $${this.currentCar.getValue()}`, W / 2, 132, C.text);
+
+    // Warning
+    this.renderer.textCentered('You will get a basic starter car.', W / 2, 150, C.orange);
+
+    // Buttons
+    const btnY = 182;
+    this.renderer.button(5, btnY, 75, 14, 'SELL CAR',
+      this.input.mouseX >= 5 && this.input.mouseX <= 80 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+
+    this.renderer.button(90, btnY, 70, 14, 'CANCEL',
+      this.input.mouseX >= 90 && this.input.mouseX <= 160 && this.input.mouseY >= btnY && this.input.mouseY <= btnY + 14);
+  }
+
+  // ---- RACE SELECT SCREEN RENDERER ----
+  renderRaceSelect() {
+    this.renderer.clear(C.darkBg);
+
+    this.renderer.text('RACE SELECTION', 100, 3, C.yellow);
+
+    if (!this.currentCar) {
+      this.renderer.text('You need a car to race!', 90, 30, C.red);
+      this.renderer.text('Buy one from classifieds first.', 75, 42, C.lightGray);
+    } else {
+      this.renderer.text(`${this.currentCar.year} ${this.currentCar.name}`, 10, 22, C.yellow);
+      this.renderer.text(`HP:${this.currentCar.horsepower} PERF:${this.currentCar.getPerformanceRating()}`, 10, 32, C.lightGray);
+    }
+
+    // Race list
+    const startY = 50;
+    for (let i = 0; i < RACES.length; i++) {
+      const race = RACES[i];
+      const ly = startY + i * 20;
+
+      if (ly > H - 30) break;
+
+      const unlocked = this.reputation >= race.minRep;
+      const hover = this.input.mouseX >= 5 && this.input.mouseX <= W - 10 &&
+                    this.input.mouseY >= ly && this.input.mouseY <= ly + 18;
+
+      if (hover) {
+        this.renderer.rect(5, ly, W - 10, 18, unlocked ? '#2a2a3e' : '#1a1a2e');
+      }
+
+      if (unlocked) {
+        this.renderer.text(race.name, 10, ly + 2, hover ? C.white : C.lightGray);
+        this.renderer.text(`Purse: $${race.purse}`, 10, ly + 12, C.yellow);
+        this.renderer.text(`Diff:`, W - 80, ly + 2, C.lightGray);
+        this.renderer.drawStars(W - 65, ly + 2, race.difficulty, 7);
+      } else {
+        this.renderer.text(`LOCKED - ${race.name}`, 10, ly + 2, C.darkGray);
+        this.renderer.text(`Need ${race.minRep} REP`, 10, ly + 12, C.darkGray);
+      }
+
+      if (hover && unlocked) {
+        this.renderer.drawTooltip(this.input.mouseX, ly - 10, `Click to race!`);
+      }
+    }
+
+    // Back button
+    this.renderer.button(5, 182, 40, 14, 'BACK',
+      this.input.mouseX >= 5 && this.input.mouseX <= 44 && this.input.mouseY >= 182 && this.input.mouseY <= 196);
+
+    // Reputation display
+    this.renderer.text(`Reputation: ${this.reputation}`, 120, 184, C.lightGray);
+    this.renderer.text(`Cash: $${this.cash}`, 230, 184, C.green);
+  }
+
+  // ---- RACING SCREEN RENDERER ----
+  renderRacing() {
+    this.renderer.drawRaceBackground();
+
+    const race = RACES[this.selectedRace];
+
+    // Race name
+    this.renderer.text(race.name, 100, 5, C.yellow);
+
+    // Countdown
+    if (this.racePhase === 'countdown') {
+      const countNum = Math.ceil(this.raceTimer / 60);
+      if (countNum > 0) {
+        this.renderer.text(countNum.toString(), 150, 80, C.yellow, 24);
+      } else {
+        this.renderer.text('GO!', 140, 80, C.green, 20);
+      }
+    }
+
+    // Player car (bottom lane)
+    const playerX = 20 + Math.floor(this.playerProgress * (W - 60));
+    this.renderer.drawCar(playerX, 155, this.currentCar ? this.currentCar.colorIdx : 0,
+      this.currentCar ? this.currentCar.bodyStyle : 'coupe');
+
+    // Opponent car (top lane)
+    const oppX = 20 + Math.floor(this.opponentProgress * (W - 60));
+    this.renderer.drawCar(oppX, 130, rand(0, CAR_COLORS.length - 1), 'muscle');
+
+    // Lane labels
+    this.renderer.text('YOU', 5, 158, C.green);
+    this.renderer.text('OPP', 5, 133, C.red);
+
+    // Progress bars
+    this.renderer.progressBar(80, 175, W - 90, 6, this.playerProgress * 100, 100, C.green);
+    this.renderer.progressBar(80, 125, W - 90, 6, this.opponentProgress * 100, 100, C.red);
+
+    // Finish line
+    this.renderer.rect(W - 35, 120, 3, 60, '#ffffff');
+    for (let i = 0; i < 30; i++) {
+      this.renderer.rect(W - 35 + (i % 2 === 0 ? 0 : 1), 120 + i * 2, 1, 1, '#ffffff');
+    }
+
+    // Race result overlay
+    if (this.racePhase === 'finished') {
+      this.renderer.rect(0, 0, W, H, 'rgba(0,0,0,0.7)');
+
+      if (this.raceResult === 'win') {
+        this.renderer.text('YOU WIN!', 120, 80, C.yellow, 16);
+        const prize = Math.round(race.purse * (0.8 + Math.random() * 0.4));
+        this.renderer.text(`Prize: $${prize}`, 120, 100, C.green);
+      } else if (this.raceResult === 'breakdown') {
+        this.renderer.text('BROKEN DOWN!', 105, 80, C.red, 14);
+        this.renderer.text('Your car gave up!', 105, 98, C.lightGray);
+      } else {
+        this.renderer.text('YOU LOSE', 120, 80, C.red, 16);
+        this.renderer.text('Better luck next time.', 95, 98, C.lightGray);
+      }
+
+      if (Math.floor(this.frameCount / 20) % 2 === 0) {
+        this.renderer.text('[ CLICK TO CONTINUE ]', 85, 130, C.yellow);
+      }
+    }
+
+    // Speed display
+    if (this.racePhase === 'racing') {
+      const speed = Math.floor(this.playerProgress * 2.5 + rand(0, 10));
+      this.renderer.text(`${speed} MPH`, W - 65, 182, C.lightGray);
+    }
+  }
+
+  // ---- RESULTS SCREEN RENDERER ----
+  renderResults() {
+    this.renderer.clear(C.darkBg);
+
+    const race = RACES[this.selectedRace];
+
+    this.renderer.text('RACE RESULTS', 105, 20, C.yellow);
+    this.renderer.text(race.name, 115, 38, C.lightGray);
+
+    if (this.raceResult === 'win') {
+      this.renderer.text('WINNER!', 130, 60, C.green, 14);
+      const prize = Math.round(race.purse * (0.8 + Math.random() * 0.4));
+      this.renderer.text(`Prize Money: $${prize}`, 100, 80, C.yellow);
+      this.renderer.text(`Reputation: +${race.difficulty * 2}`, 100, 95, C.lightGray);
+    } else if (this.raceResult === 'breakdown') {
+      this.renderer.text('BROKEN DOWN', 105, 60, C.red, 14);
+      this.renderer.text('Your car broke down during the race.', 60, 80, C.lightGray);
+      this.renderer.text('Reputation: -2', 110, 95, C.red);
+    } else {
+      this.renderer.text('DEFEATED', 120, 60, C.red, 14);
+      this.renderer.text('The opponent was faster.', 95, 80, C.lightGray);
+      const consolation = Math.round(race.purse * 0.1);
+      this.renderer.text(`Consolation: $${consolation}`, 100, 95, C.yellow);
+    }
+
+    // Stats summary
+    this.renderer.panel(40, 120, W - 80, 50, C.darkBg, C.panelBorder);
+    this.renderer.text('CAREER STATS', 120, 125, C.accent);
+    this.renderer.text(`Total Cash: $${this.cash}`, 50, 140, C.yellow);
+    this.renderer.text(`Reputation: ${this.reputation}`, 50, 152, C.lightGray);
+    this.renderer.text(`Races Won: ${this.racesWon}`, 180, 140, C.lightGray);
+    this.renderer.text(`Cars Owned: ${this.carsOwned}`, 180, 152, C.lightGray);
+
+    if (Math.floor(this.frameCount / 20) % 2 === 0) {
+      this.renderer.text('[ CLICK TO CONTINUE ]', 85, 178, C.yellow);
+    }
+  }
+
+  // ---- MAIN LOOP ----
+  gameLoop(timestamp) {
+    this.update();
+    this.render();
+    requestAnimationFrame((t) => this.gameLoop(t));
+  }
+
+  start() {
+    // Try to load saved game
+    const raw = localStorage.getItem('streetGarage89');
+    if (raw) {
+      try {
+        const data = JSON.parse(raw);
+        this.cash = data.cash || 3500;
+        this.reputation = data.reputation || 0;
+        this.carsOwned = data.carsOwned || 1;
+        this.racesWon = data.racesWon || 0;
+        this.day = data.day || 1;
+        if (data.currentCar) {
+          const carData = data.currentCar;
+          this.currentCar = new Car(CAR_TEMPLATES[0], carData.condition);
+          Object.assign(this.currentCar, carData);
+        }
+      } catch(e) {}
+    }
+
+    this.gameLoop(0);
+  }
+}
+
+// ============================================================
+// START THE GAME
+// ============================================================
+const game = new Game();
+game.start();
+
+</script>
+</body>
+</html>
+

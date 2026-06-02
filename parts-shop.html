@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Street Garage - Parts Shop</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a12; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// CONSTANTS & SETUP
+// ============================================================
+const COLORS = {
+  bg: '#0a0a12', panelBg: '#141828', panelBorder: '#3a4060',
+  text: '#c8c8d0', dimText: '#5a6070', accent: '#e8c840',
+  green: '#40d060', red: '#e04040', yellow: '#f0c830',
+  lightGray: '#a0a0b0', darkGray: '#2a3040', orange: '#e08030'
+};
+
+const W = 320, H = 200;
+const canvas = document.getElementById('c');
+canvas.width = W; canvas.height = H;
+
+function scaleCanvas() {
+  const s = Math.min(Math.floor(window.innerWidth / W), Math.floor(window.innerHeight / H));
+  canvas.style.width = (W * s) + 'px';
+  canvas.style.height = (H * s) + 'px';
+}
+scaleCanvas();
+window.addEventListener('resize', scaleCanvas);
+
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// ============================================================
+// RENDERER UTILITIES
+// ============================================================
+function drawRect(x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(Math.floor(x), Math.floor(y), w, h); }
+function drawText(str, x, y, color, size) {
+  ctx.fillStyle = color || COLORS.text;
+  ctx.font = (size || 8) + 'px monospace';
+  ctx.fillText(str, Math.floor(x), Math.floor(y));
+}
+function drawTextCentered(str, x, y, color, size) {
+  ctx.fillStyle = color || COLORS.text;
+  ctx.font = (size || 8) + 'px monospace';
+  const tw = ctx.measureText(str).width;
+  ctx.fillText(str, Math.floor(x - tw / 2), Math.floor(y));
+}
+function drawPanel(x, y, w, h) {
+  drawRect(x, y, w, h, COLORS.panelBg);
+  ctx.strokeStyle = COLORS.panelBorder;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+function drawButton(x, y, w, h, label, hover) {
+  drawRect(x, y, w, h, hover ? '#2a3050' : COLORS.darkGray);
+  ctx.strokeStyle = hover ? COLORS.accent : '#4a5070';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  drawTextCentered(label, x + w / 2, y + h / 2 + 3, hover ? COLORS.accent : COLORS.text);
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+const mouse = { x: 0, y: 0 };
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+});
+canvas.addEventListener('click', e => {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) * W / r.width;
+  mouse.y = (e.clientY - r.top) * H / r.height;
+  handleClick(mouse.x, mouse.y);
+});
+
+// ============================================================
+// AUDIO
+// ============================================================
+let audioCtx = null;
+function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+function playTone(freq, dur, type, vol) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type || 'square';
+  o.frequency.value = freq;
+  g.gain.value = vol || 0.1;
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+function sfxClick() { playTone(800, 0.05, 'square', 0.08); }
+function sfxSelect() { playTone(600, 0.1, 'square', 0.1); playTone(900, 0.15, 'square', 0.08); }
+function sfxError() { playTone(200, 0.2, 'sawtooth', 0.1); }
+function sfxWrench() { playTone(300, 0.08, 'sawtooth', 0.12); playTone(450, 0.06, 'square', 0.08); }
+function sfxCash() { playTone(1200, 0.08, 'square', 0.1); playTone(1600, 0.12, 'square', 0.08); }
+function sfxInstall() { playTone(500, 0.1, 'square', 0.1); playTone(700, 0.15, 'square', 0.08); playTone(900, 0.2, 'square', 0.06); }
+
+// ============================================================
+// PARTS DATA TABLE
+// ============================================================
+const PART_CATEGORIES = [
+  { id: 'carb', name: 'Carburetor', stat: 'hp', icon: 'C' },
+  { id: 'intake', name: 'Intake Manifold', stat: 'hp', icon: 'I' },
+  { id: 'exhaust', name: 'Exhaust System', stat: 'hp', icon: 'E' },
+  { id: 'camshaft', name: 'Camshaft', stat: 'hp', icon: 'M' },
+  { id: 'tires', name: 'Tires', stat: 'grip', icon: 'T' },
+  { id: 'transmission', name: 'Transmission', stat: 'hp', icon: 'X' },
+  { id: 'differential', name: 'Differential', stat: 'grip', icon: 'D' },
+  { id: 'weight', name: 'Weight Reduction', stat: 'weight', icon: 'W' },
+  { id: 'cooling', name: 'Cooling System', stat: 'reliability', icon: 'K' },
+  { id: 'brakes', name: 'Brakes', stat: 'reliability', icon: 'B' }
+];
+
+const PART_TIERS = [
+  { name: 'Stock', hpMod: 0, gripMod: 0, weightMod: 0, relMod: 0, cost: 0 },
+  { name: 'Aftermarket', hpMod: 5, gripMod: 2, weightMod: -10, relMod: -3, cost: 200 },
+  { name: 'Performance', hpMod: 12, gripMod: 5, weightMod: -20, relMod: -6, cost: 500 },
+  { name: 'Racing', hpMod: 20, gripMod: 8, weightMod: -35, relMod: -12, cost: 900 },
+  { name: 'Pro Stock', hpMod: 30, gripMod: 12, weightMod: -50, relMod: -18, cost: 1500 }
+];
+
+function generatePartsForCategory(catId) {
+  const parts = [];
+  for (let t = 0; t < PART_TIERS.length; t++) {
+    const tier = PART_TIERS[t];
+    parts.push({
+      id: catId + '_' + t,
+      name: tier.name + ' ' + PART_CATEGORIES.find(c => c.id === catId).name,
+      tier: t,
+      hpMod: tier.hpMod,
+      gripMod: tier.gripMod,
+      weightMod: tier.weightMod,
+      relMod: tier.relMod,
+      cost: t === 0 ? 0 : tier.cost + Math.floor(Math.random() * 100 - 50),
+      category: catId
+    });
+  }
+  return parts;
+}
+
+// ============================================================
+// GAME DATA
+// ============================================================
+function loadGame() {
+  const d = localStorage.getItem('streetgarage_save');
+  return d ? JSON.parse(d) : null;
+}
+function saveGame() {
+  localStorage.setItem('streetgarage_save', JSON.stringify(gameData));
+}
+
+let gameData = loadGame();
+if (!gameData) { window.location.href = 'index.html'; }
+
+// ============================================================
+// PIXEL ART CAR DRAWING
+// ============================================================
+function drawCar(cx, cy, colorIdx, bodyStyle, scale) {
+  const s = scale || 1;
+  const carColors = ['#c03030','#2060c0','#d0a020','#408040','#e0e0e0','#303050','#8040a0','#c06020'];
+  const col = carColors[colorIdx % carColors.length];
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(s, s);
+
+  // Shadow
+  drawRect(-30, 28, 60, 4, 'rgba(0,0,0,0.3)');
+
+  // Body lower
+  drawRect(-28, 10, 56, 14, col);
+  // Body upper (cabin)
+  drawRect(-16, -2, 30, 14, col);
+  // Roof
+  drawRect(-12, -6, 22, 5, col);
+
+  // Windows
+  drawRect(-14, -1, 8, 10, '#6090c0');
+  drawRect(-4, -1, 8, 10, '#6090c0');
+  drawRect(6, -1, 8, 10, '#6090c0');
+
+  // Headlight
+  drawRect(28, 12, 3, 4, '#ffffa0');
+  // Taillight
+  drawRect(-30, 12, 3, 4, '#ff4040');
+
+  // Bumpers
+  drawRect(-31, 22, 62, 3, '#808090');
+
+  // Wheels
+  drawRect(-22, 24, 12, 8, '#1a1a1a');
+  drawRect(10, 24, 12, 8, '#1a1a1a');
+  drawRect(-20, 26, 8, 4, '#a0a0b0');
+  drawRect(12, 26, 8, 4, '#a0a0b0');
+
+  // Hood scoop
+  drawRect(14, -2, 8, 3, col);
+
+  ctx.restore();
+}
+
+// ============================================================
+// PARTS SHOP STATE
+// ============================================================
+let shopState = 'browse'; // browse, selectpart, install, confirm
+let selectedCategory = 0;
+let selectedPartIdx = -1;
+let installPhase = 'remove'; // remove, install
+let boltsRemoved = 0;
+let boltsInstalled = 0;
+let currentCarIdx = gameData.currentCarIdx >= 0 ? gameData.currentCarIdx : 0;
+let frameCount = 0;
+
+// Bolt positions for the install animation (4 bolts around a part area)
+const BOLT_POSITIONS = [
+  { x: 140, y: 65 },   // top-left of engine bay
+  { x: 170, y: 65 },   // top-right of engine bay
+  { x: 140, y: 95 },   // bottom-left of engine bay
+  { x: 170, y: 95 }    // bottom-right of engine bay
+];
+
+// ============================================================
+// SHOP SCREENS
+// ============================================================
+function drawBrowseScreen() {
+  // Background - garage interior
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Floor
+  drawRect(0, H - 15, W, 15, '#2a2a38');
+  for (let i = 0; i < W; i += 20) {
+    drawRect(i, H - 15, 18, 1, '#3a3a48');
+  }
+
+  // Header bar
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('PARTS SHOP', 5, 10, COLORS.accent);
+  drawText(`$${gameData.cash}`, W - 40, 10, COLORS.green);
+
+  // Car selector
+  if (gameData.cars.length > 1) {
+    drawText('Car:', 5, 20, COLORS.dimText);
+    for (let i = 0; i < gameData.cars.length; i++) {
+      const car = gameData.cars[i];
+      const x = 30 + i * 75;
+      const hover = mouse.x >= x && mouse.x <= x + 70 && mouse.y >= 18 && mouse.y <= 26;
+      const isActive = i === currentCarIdx;
+      drawButton(x, 18, 70, 8, car.name.substring(0, 12), hover);
+      if (isActive) {
+        ctx.strokeStyle = COLORS.green;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x - 0.5, 17.5, 72, 9);
+      }
+    }
+  }
+
+  // Current car display
+  const car = gameData.cars[currentCarIdx];
+  if (car) {
+    drawText(`${car.year} ${car.name}`, 5, 36, COLORS.accent);
+    drawText(`HP:${car.getEffectiveHP()} GRP:${car.getEffectiveGrip()} REL:${car.getEffectiveReliability()}%`, 5, 46, COLORS.lightGray);
+
+    // Draw car
+    drawCar(160, 75, car.colorIdx, car.bodyStyle, 1.2);
+
+    // Current parts display
+    drawPanel(5, 108, W - 10, 72);
+    drawText('INSTALLED PARTS:', 10, 116, COLORS.accent);
+
+    let py = 124;
+    for (let i = 0; i < PART_CATEGORIES.length && py < 176; i++) {
+      const cat = PART_CATEGORIES[i];
+      const installedPart = car.parts[cat.id];
+      let partName = 'None';
+      if (installedPart !== null && installedPart !== undefined) {
+        const tier = PART_TIERS[installedPart.tier || 0];
+        partName = tier.name;
+      }
+      drawText(`${cat.icon} ${cat.name}:`, 10, py, COLORS.dimText);
+      drawText(partName, 95, py, installedPart ? COLORS.green : COLORS.dimText);
+      py += 8;
+    }
+
+    // Category selector buttons (bottom row)
+    drawText('SELECT PART TO UPGRADE:', 10, 186, COLORS.dimText);
+    for (let i = 0; i < PART_CATEGORIES.length && (10 + i * 32) < W - 5; i++) {
+      const cat = PART_CATEGORIES[i];
+      const bx = 10 + i * 32;
+      const hover = mouse.x >= bx && mouse.x <= bx + 30 && mouse.y >= 192 && mouse.y <= 200;
+      drawButton(bx, 192, 30, 8, cat.name.substring(0, 6), hover);
+    }
+  }
+
+  // Navigation buttons
+  drawButton(5, H - 14, 30, 12, 'MENU',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+function drawSelectPartScreen() {
+  const cat = PART_CATEGORIES[selectedCategory];
+  const car = gameData.cars[currentCarIdx];
+
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Header
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText(`UPGRADE: ${cat.name.toUpperCase()}`, 5, 10, COLORS.accent);
+  drawText(`$${gameData.cash}`, W - 40, 10, COLORS.green);
+
+  // Current installed part
+  const currentPart = car.parts[cat.id];
+  if (currentPart) {
+    drawPanel(5, 18, W - 10, 20);
+    drawText(`Currently: ${PART_TIERS[currentPart.tier || 0].name} (${currentPart.hpMod > 0 ? '+' : ''}${currentPart.hpMod}HP)`, 10, 28, COLORS.lightGray);
+    drawText(`Remove for $${Math.floor(currentPart.cost * 0.3)} trade-in`, 10, 38, COLORS.dimText);
+  } else {
+    drawPanel(5, 18, W - 10, 20);
+    drawText('Currently: No part installed', 10, 30, COLORS.dimText);
+  }
+
+  // Available parts list
+  const availableParts = generatePartsForCategory(cat.id);
+  let py = 46;
+
+  for (let i = 0; i < availableParts.length; i++) {
+    const part = availableParts[i];
+    if (part.tier === 0 && currentPart) continue; // Skip stock if already have something
+
+    const hover = mouse.x >= 10 && mouse.x <= W - 10 && mouse.y >= py && mouse.y <= py + 24;
+    const canAfford = gameData.cash >= part.cost;
+
+    drawPanel(10, py, W - 20, 24);
+    if (hover && canAfford) {
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(9.5, py - 0.5, W - 18, 25);
+    }
+
+    drawText(`${part.name}`, 16, py + 9, canAfford ? COLORS.text : COLORS.dimText);
+    drawText(`HP:${part.hpMod > 0 ? '+' : ''}${part.hpMod} GRP:${part.gripMod > 0 ? '+' : ''}${part.gripMod} WGT:${part.weightMod}`, 16, py + 18, COLORS.dimText);
+    drawText(`$${part.cost}`, W - 50, py + 14, canAfford ? COLORS.green : COLORS.red);
+
+    if (hover && canAfford) {
+      selectedPartIdx = i;
+    }
+
+    py += 26;
+  }
+
+  // Back button
+  drawButton(5, H - 14, 30, 12, 'BACK',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+function drawInstallScreen() {
+  const car = gameData.cars[currentCarIdx];
+  const cat = PART_CATEGORIES[selectedCategory];
+  const availableParts = generatePartsForCategory(cat.id);
+  const newPart = availableParts[selectedPartIdx];
+
+  drawRect(0, 0, W, H, '#1a2030');
+
+  // Header
+  drawRect(0, 0, W, 14, '#0e1220');
+  drawText('INSTALL PART', 5, 10, COLORS.accent);
+
+  // Car with bolt overlay
+  drawCar(160, 75, car.colorIdx, car.bodyStyle, 1.2);
+
+  // Draw bolts
+  for (let i = 0; i < 4; i++) {
+    const bolt = BOLT_POSITIONS[i];
+    let removed = false;
+
+    if (installPhase === 'remove') {
+      removed = i < boltsRemoved;
+    } else if (installPhase === 'install') {
+      removed = i >= boltsInstalled; // In install phase, we're putting them back
+    }
+
+    if (!removed) {
+      // Draw bolt head (hexagonal-ish)
+      drawRect(bolt.x - 3, bolt.y - 2, 6, 4, '#808090');
+      drawRect(bolt.x - 2, bolt.y - 3, 4, 6, '#9090a0');
+      // Cross pattern
+      drawRect(bolt.x - 1, bolt.y - 2, 2, 4, '#606070');
+      drawRect(bolt.x - 2, bolt.y - 1, 4, 2, '#606070');
+    } else {
+      // Draw removed bolt on the ground (or in hand)
+      drawRect(bolt.x - 2, bolt.y + 15, 4, 3, '#707080');
+    }
+
+    // Highlight bolt on hover
+    if (mouse.x >= bolt.x - 5 && mouse.x <= bolt.x + 5 &&
+        mouse.y >= bolt.y - 5 && mouse.y <= bolt.y + 5) {
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bolt.x - 5, bolt.y - 5, 10, 10);
+    }
+  }
+
+  // Status text
+  if (installPhase === 'remove') {
+    drawTextCentered(`REMOVE OLD PART - ${boltsRemoved}/4 bolts`, W / 2, H - 30, COLORS.yellow);
+    if (boltsRemoved === 4) {
+      drawTextCentered('[ CLICK TO REMOVE ]', W / 2, H - 18, COLORS.green);
+    }
+  } else if (installPhase === 'install') {
+    drawTextCentered(`INSTALL ${newPart.name.toUpperCase()} - ${boltsInstalled}/4 bolts`, W / 2, H - 30, COLORS.yellow);
+    if (boltsInstalled === 4) {
+      drawTextCentered('[ CLICK TO FINISH ]', W / 2, H - 18, COLORS.green);
+    }
+  }
+
+  // Part info panel
+  drawPanel(5, H - 48, W - 10, 16);
+  drawText(`${newPart.name} | HP:${newPart.hpMod > 0 ? '+' : ''}${newPart.hpMod} GRP:${newPart.gripMod > 0 ? '+' : ''}${newPart.gripMod}`, 10, H - 38, COLORS.lightGray);
+  drawText(`Cost: $${newPart.cost}`, W - 60, H - 38, COLORS.green);
+
+  // Cancel button
+  drawButton(5, H - 14, 30, 12, 'CANCEL',
+    mouse.x >= 5 && mouse.x <= 35 && mouse.y >= H - 14 && mouse.y <= H - 2);
+}
+
+// ============================================================
+// CLICK HANDLER
+// ============================================================
+function handleClick(mx, my) {
+  initAudio();
+
+  if (shopState === 'browse') {
+    // Car selector clicks
+    if (gameData.cars.length > 1) {
+      for (let i = 0; i < gameData.cars.length; i++) {
+        const x = 30 + i * 75;
+        if (mx >= x && mx <= x + 70 && my >= 18 && my <= 26) {
+          sfxClick();
+          currentCarIdx = i;
+          gameData.currentCarIdx = i;
+          saveGame();
+          return;
+        }
+      }
+    }
+
+    // Category selector clicks (bottom row)
+    for (let i = 0; i < PART_CATEGORIES.length && (10 + i * 32) < W - 5; i++) {
+      const bx = 10 + i * 32;
+      if (mx >= bx && mx <= bx + 30 && my >= 192 && my <= 200) {
+        sfxClick();
+        selectedCategory = i;
+        shopState = 'selectpart';
+        return;
+      }
+    }
+
+    // Menu button
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      window.location.href = 'index.html';
+    }
+  } else if (shopState === 'selectpart') {
+    const cat = PART_CATEGORIES[selectedCategory];
+    const car = gameData.cars[currentCarIdx];
+    const availableParts = generatePartsForCategory(cat.id);
+
+    let py = 46;
+    for (let i = 0; i < availableParts.length; i++) {
+      const part = availableParts[i];
+      if (part.tier === 0 && car.parts[cat.id]) { py += 26; continue; }
+
+      if (mx >= 10 && mx <= W - 10 && my >= py && my <= py + 24) {
+        if (gameData.cash >= part.cost) {
+          sfxSelect();
+          selectedPartIdx = i;
+
+          // Start install process
+          const currentPart = car.parts[cat.id];
+          if (currentPart) {
+            installPhase = 'remove';
+            boltsRemoved = 0;
+          } else {
+            installPhase = 'install';
+            boltsInstalled = 0;
+          }
+          shopState = 'install';
+        } else {
+          sfxError();
+        }
+        return;
+      }
+      py += 26;
+    }
+
+    // Back button
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      shopState = 'browse';
+    }
+  } else if (shopState === 'install') {
+    const car = gameData.cars[currentCarIdx];
+    const cat = PART_CATEGORIES[selectedCategory];
+    const availableParts = generatePartsForCategory(cat.id);
+    const newPart = availableParts[selectedPartIdx];
+
+    if (installPhase === 'remove') {
+      // Check bolt clicks
+      for (let i = 0; i < 4; i++) {
+        const bolt = BOLT_POSITIONS[i];
+        if (i >= boltsRemoved && mx >= bolt.x - 5 && mx <= bolt.x + 5 &&
+            my >= bolt.y - 5 && my <= bolt.y + 5) {
+          sfxWrench();
+          boltsRemoved++;
+          return;
+        }
+      }
+
+      // All bolts removed - click to remove part
+      if (boltsRemoved === 4) {
+        // Trade-in value for old part
+        const currentPart = car.parts[cat.id];
+        if (currentPart) {
+          const tradeIn = Math.floor(currentPart.cost * 0.3);
+          gameData.cash += tradeIn;
+        }
+
+        installPhase = 'install';
+        boltsInstalled = 0;
+        sfxInstall();
+      }
+    } else if (installPhase === 'install') {
+      // Check bolt clicks for installing
+      for (let i = 0; i < 4; i++) {
+        const bolt = BOLT_POSITIONS[i];
+        if (i >= boltsInstalled && mx >= bolt.x - 5 && mx <= bolt.x + 5 &&
+            my >= bolt.y - 5 && my <= bolt.y + 5) {
+          sfxWrench();
+          boltsInstalled++;
+          return;
+        }
+      }
+
+      // All bolts installed - finalize
+      if (boltsInstalled === 4) {
+        gameData.cash -= newPart.cost;
+
+        // Install the part
+        car.parts[cat.id] = { ...newPart };
+
+        sfxCash();
+        saveGame();
+        shopState = 'browse';
+      }
+    }
+
+    // Cancel button
+    if (mx >= 5 && mx <= 35 && my >= H - 14 && my <= H - 2) {
+      sfxClick();
+      shopState = 'browse';
+    }
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+function gameLoop() {
+  frameCount++;
+
+  if (shopState === 'browse') drawBrowseScreen();
+  else if (shopState === 'selectpart') drawSelectPartScreen();
+  else if (shopState === 'install') drawInstallScreen();
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
+
