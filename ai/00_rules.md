@@ -25,9 +25,5 @@ This project uses a sequential local AI workflow:
 - Coder writes source/tests and `ai/implementation_log.md`.
 - Reviewer writes only to `ai/review_notes.md` unless told otherwise.
 
-## No Git Assumption
-
-This project may not use Git. Before coding:
-- Create or verify a snapshot exists in `ai/snapshots/`.
 - Record every changed file in `ai/implementation_log.md`.
 - Avoid broad file rewrites.
